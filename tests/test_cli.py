@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -19,9 +18,7 @@ from conftest import (
     puntos_habiles,
     tabla_ledgifi,
 )
-from fund_quotes import catalog, store
 from fund_quotes.fetch import FetchError
-from fund_quotes.quote import Quote
 
 HOY = "2026-10-19"
 
@@ -274,18 +271,44 @@ def test_backfill_fuera_de_rango_es_error_de_configuracion(tmp_path, fuentes, ca
     assert "--backfill" in err
 
 
-def test_backfill_que_excede_los_puntos_disponibles_no_recorta(tmp_path, fuentes, capsys):
+def test_backfill_que_excede_los_puntos_no_bloquea_el_feed(tmp_path, fuentes, capsys):
     # Serie de índice recortada a 3 puntos: solo 2 son anteriores al 2026-10-15.
     fuentes["a"] = _indice_corto(fuentes["a"])
     ruta = escribir_feed(
         tmp_path / "quotes" / "CFMITNIPSA.json",
         feed_de("CFMITNIPSA", [(date(2026, 10, 14), 5054.0853)]),
     )
-    antes = ruta.read_bytes()
-    codigo, _, err = correr(_args(tmp_path, "--backfill", "30", fondo="CFMITNIPSA"), capsys)
-    assert codigo == 1
-    assert "no se recorta" in err
-    assert ruta.read_bytes() == antes
+    codigo, out, err = correr(_args(tmp_path, "--backfill", "30", fondo="CFMITNIPSA"), capsys)
+
+    # El backfill es auxiliar: se degrada a aviso, el feed del día se publica y
+    # el código de salida queda en 0 (no es una falla del fondo).
+    assert codigo == 0
+    assert "[AVISO] CFMITNIPSA backfill:" in out
+    assert "no se recorta" in out
+    assert err == ""
+    assert leer_json(ruta)["data"][-1] == {"date": "2026-10-15", "close": 5054.2279}
+    assert not (tmp_path / "quotes" / "CFMITNIPSA.backfill.json").exists()
+    assert out.count("[OK] CFMITNIPSA") == 1
+
+
+def test_backfill_que_falla_no_impide_publicar_el_otro_fondo(tmp_path, fuentes, capsys):
+    fuentes["a"] = _indice_corto(fuentes["a"])
+    ruta_b = escribir_feed(
+        tmp_path / "quotes" / "CFINRENTAS.json",
+        feed_de("CFINRENTAS", [(date(2026, 10, 14), 2175.45)]),
+    )
+
+    codigo, out, _ = correr(_args(tmp_path, "--backfill", "30"), capsys)
+
+    assert codigo == 0
+    assert "[AVISO] CFMITNIPSA backfill:" in out
+    assert "[OK] CFMITNIPSA" in out and out.count("[OK] CFMITNIPSA") == 1
+    assert "[OK] CFINRENTAS" in out and out.count("[OK] CFINRENTAS") == 1
+    assert leer_json(ruta_b)["data"][-1] == {"date": "2026-10-15", "close": 2181.18}
+    assert (
+        leer_json(tmp_path / "quotes" / "CFMITNIPSA.json")["data"][-1]["date"]
+        == "2026-10-15"
+    )
     assert not (tmp_path / "quotes" / "CFMITNIPSA.backfill.json").exists()
 
 

@@ -63,13 +63,16 @@ Para correrlo a mano en local:
 python3 -m fund_quotes --out docs/quotes --status-page docs/index.html
 ```
 
+El CLI debe ejecutarse **desde la raíz del repo**: `--out` y `--status-page` relativos se resuelven
+contra el directorio actual y después se exigen dentro de la raíz del repositorio.
+
 Flags disponibles:
 
 | Flag | Para qué sirve |
 |---|---|
 | `--fondo TICKER [TICKER ...]` | Limita la corrida a uno o más fondos del catálogo (por defecto, ambos) |
 | `--dry-run` | Calcula, valida y reporta sin escribir ningún archivo |
-| `--backfill N` | Genera N puntos derivados del índice en `<TICKER>.backfill.json` (solo `CFMITNIPSA`; `1 ≤ N ≤ 155`) |
+| `--backfill N` | Genera N puntos **semimensuales** derivados del índice en `<TICKER>.backfill.json` (solo `CFMITNIPSA`; `1 ≤ N ≤ 155`) |
 | `--today YYYY-MM-DD` | Fecha de referencia para la página de estado y las validaciones (por defecto, hoy en `America/Santiago`) |
 | `--force-anomaly` | Acepta un salto diario mayor a 5,00%, dejando registro del forzado |
 | `--out DIR` / `--status-page ARCHIVO` | Cambian las rutas de salida (por defecto `docs/quotes` y `docs/index.html`) |
@@ -142,9 +145,11 @@ hábiles transcurridos desde el último punto, con alerta visual cuando supera *
 - **No corrige historia pasada**: el feed solo agrega puntos nuevos; nunca reescribe ni reordena lo ya
   publicado. Si una fuente publica un valor distinto para una fecha ya guardada, se conserva el valor
   existente y se avisa por stdout.
-- **`--backfill` es una aproximación**: los puntos derivados se calculan como
+- **`--backfill` es una aproximación semimensual**: los puntos derivados se calculan como
   `close_conocido × índice(d) / índice(último)`, viven en `<TICKER>.backfill.json` y **no** se mezclan
-  con el feed oficial. No son cuotas publicadas y no deberían usarse para valorizar la cartera.
+  con el feed oficial. El índice trae ~2 puntos por mes (156 en total desde 2016), así que `N` cuenta
+  puntos semimensuales, **no** días: `--backfill 155` cubre la serie completa, no un año de ruedas.
+  No son cuotas publicadas y no deberían usarse para valorizar la cartera.
 - Un salto diario mayor a 5,00% se rechaza salvo `--force-anomaly`.
 - Solo dos fondos, solo pesos chilenos (`CLP`), solo las fuentes documentadas en
   `specs/fund-quotes.spec.md`.

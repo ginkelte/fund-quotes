@@ -18,6 +18,7 @@ jobs:
   actualizar:
     name: Actualizar feed y publicar
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,9 +28,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+          # Sin este archivo, setup-python busca **/requirements.txt y aborta el paso.
+          cache-dependency-path: pyproject.toml
 
-      - name: Instalar pytest
-        run: pip install pytest
+      - name: Instalar dependencias de desarrollo
+        run: pip install "pytest>=7,<9" ruff
+
+      - name: Revisar el estilo con ruff
+        run: ruff check .
 
       - name: Correr los tests
         run: python -m pytest -q

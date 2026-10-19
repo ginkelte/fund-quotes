@@ -10,11 +10,12 @@ import os
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from enum import StrEnum
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import catalog, guards, status_page, store
+from .backfill import BACKFILL_MAX, BACKFILL_MIN, BackfillError, construir_backfill
 from .catalog import Fund
 from .fetch import FetchError
 from .quote import Quote
@@ -32,18 +33,22 @@ SALIDA_CONFIG = 1
 SALIDA_PARCIAL = 2
 SALIDA_GUARDA = 3
 
-BACKFILL_MIN = 1
-BACKFILL_MAX = 155
 
+class Estado(StrEnum):
+    """Estado de un fondo en la corrida; sus valores son los del contrato de salida."""
 
-class BackfillError(Exception):
-    """Parámetros o datos que impiden generar el backfill derivado."""
+    OK = "ok"
+    SIN_CAMBIOS = "sin_cambios"
+    CONFLICTO = "conflicto"
+    ANTIGUO = "antiguo"
+    ANOMALIA = "anomalia"
+    FALLA = "falla"
 
 
 @dataclass
 class Resultado:
     fund: Fund
-    estado: str  # ok | sin_cambios | conflicto | antiguo | anomalia | falla
+    estado: Estado
     feed: store.Feed | None = None
     quote: Quote | None = None
     lineas: list[str] = field(default_factory=list)
@@ -162,49 +167,6 @@ def _linea_anomalia(fund: Fund, exc: guards.AnomaliaDetectada) -> str:
     )
 
 
-def _construir_backfill(
-    base: store.Feed | None,
-    indice: list[ledgifi.IndexPoint],
-    n: int,
-    fund: Fund,
-) -> store.Feed:
-    if base is None or base.last is None:
-        raise BackfillError(
-            f"{fund.ticker} no tiene punto oficial: no hay referencia para derivar el backfill"
-        )
-    ultimo = base.last
-    por_fecha = {punto.date: punto.value for punto in indice}
-    if ultimo.date not in por_fecha:
-        raise BackfillError(
-            f"la serie de índice no trae el punto {ultimo.date.isoformat()} "
-            f"({fund.ticker}); no se puede derivar el backfill"
-        )
-    indice_ultimo = por_fecha[ultimo.date]
-    anteriores = [punto for punto in indice if punto.date < ultimo.date]
-    if len(anteriores) < n:
-        raise BackfillError(
-            f"--backfill {n} excede los {len(anteriores)} puntos de índice anteriores "
-            f"a {ultimo.date.isoformat()}; no se recorta la serie"
-        )
-
-    seleccion = anteriores[-n:]
-    puntos: list[Quote] = []
-    for punto in seleccion:
-        valor = (
-            Decimal(str(ultimo.close)) * punto.value / indice_ultimo
-        ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-        puntos.append(Quote(date=punto.date, close=float(valor)))
-
-    return store.Feed(
-        ticker=fund.ticker,
-        name=fund.name,
-        currency=store.CURRENCY,
-        source=f"{fund.source}#indice",
-        updated=puntos[-1].date,
-        data=puntos,
-    )
-
-
 def _procesar_fondo(
     fund: Fund,
     existente: store.Feed | None,
@@ -220,7 +182,7 @@ def _procesar_fondo(
         return (
             Resultado(
                 fund=fund,
-                estado="falla",
+                estado=Estado.FALLA,
                 feed=existente,
                 lineas=[f"[FALLA] {fund.ticker} fuente={fund.source} motivo={exc.motivo}"],
             ),
@@ -230,7 +192,7 @@ def _procesar_fondo(
         return (
             Resultado(
                 fund=fund,
-                estado="falla",
+                estado=Estado.FALLA,
                 feed=existente,
                 lineas=[f"[FALLA] {fund.ticker} fuente={fund.source} motivo={exc}"],
             ),
@@ -244,7 +206,7 @@ def _procesar_fondo(
         return (
             Resultado(
                 fund=fund,
-                estado="anomalia",
+                estado=Estado.ANOMALIA,
                 feed=existente,
                 quote=quote,
                 lineas=[
@@ -257,7 +219,9 @@ def _procesar_fondo(
         )
 
     fusionado, estado_merge = store.merge(existente, quote, fund)
-    resultado = Resultado(fund=fund, estado="sin_cambios", feed=existente, quote=quote)
+    resultado = Resultado(
+        fund=fund, estado=Estado.SIN_CAMBIOS, feed=existente, quote=quote
+    )
 
     if estado_merge == "agregado":
         forzado = False
@@ -265,7 +229,7 @@ def _procesar_fondo(
             guards.validar_anomalia(quote, existente.last if existente else None)
         except guards.AnomaliaDetectada as exc:
             if not args.force_anomaly:
-                resultado.estado = "anomalia"
+                resultado.estado = Estado.ANOMALIA
                 resultado.lineas.append(_linea_anomalia(fund, exc))
                 return resultado, None
             forzado = True
@@ -274,7 +238,7 @@ def _procesar_fondo(
                 f"variacion={guards.formato_pct(exc.variacion, signo=True)} "
                 f"umbral={guards.formato_pct(exc.umbral)} fecha={exc.fecha.isoformat()}"
             )
-        resultado.estado = "ok"
+        resultado.estado = Estado.OK
         resultado.feed = fusionado
         resultado.lineas.append(_linea_ok(fund, quote))
         if forzado:
@@ -283,7 +247,7 @@ def _procesar_fondo(
                 f"fecha={quote.date.isoformat()} close={_close_txt(quote.close)}"
             )
     elif estado_merge == "nuevo":
-        resultado.estado = "ok"
+        resultado.estado = Estado.OK
         resultado.feed = fusionado
         resultado.lineas.append(_linea_ok(fund, quote))
     elif estado_merge == "conflicto":
@@ -292,7 +256,7 @@ def _procesar_fondo(
             if punto.date == quote.date:
                 guardado = punto
                 break
-        resultado.estado = "conflicto"
+        resultado.estado = Estado.CONFLICTO
         resultado.lineas.append(
             _linea_sin_cambios(fund, guardado, "ya_existia_con_otro_valor")
         )
@@ -302,21 +266,28 @@ def _procesar_fondo(
             f"(la fuente publicó {_close_txt(quote.close)})"
         )
     elif estado_merge == "antiguo":
-        resultado.estado = "antiguo"
+        resultado.estado = Estado.ANTIGUO
         resultado.lineas.append(
             _linea_sin_cambios(fund, quote, "fecha_anterior_al_ultimo_punto")
         )
     else:
-        resultado.estado = "sin_cambios"
+        resultado.estado = Estado.SIN_CAMBIOS
         resultado.lineas.append(_linea_sin_cambios(fund, quote, "ya_publicado"))
 
     if necesita_indice:
-        base = resultado.feed if resultado.estado == "ok" else existente
-        if indice is None or args.backfill is None:
-            raise BackfillError(
-                f"{fund.ticker} no expone serie de índice: el backfill no está disponible"
-            )
-        return resultado, _construir_backfill(base, indice, args.backfill, fund)
+        base = resultado.feed if resultado.estado is Estado.OK else existente
+        try:
+            if indice is None or args.backfill is None:
+                raise BackfillError(
+                    f"{fund.ticker} no expone serie de índice: el backfill no está disponible"
+                )
+            backfill = construir_backfill(base, indice, args.backfill, fund)
+        except BackfillError as exc:
+            # El backfill es auxiliar: se degrada a aviso y no condiciona el feed
+            # oficial ni el código de salida (§8).
+            resultado.lineas.append(f"[AVISO] {fund.ticker} backfill: {exc}")
+            return resultado, None
+        return resultado, backfill
 
     if args.backfill is not None and not fund.supports_backfill:
         resultado.lineas.append(f"[SIN CAMBIOS] {fund.ticker} backfill=no_disponible")
@@ -368,17 +339,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[FALLA] {fund.ticker} motivo={exc}", file=sys.stderr)
             return SALIDA_CONFIG
 
-    # Fase 2: adquirir, parsear, aplicar guardas y fusionar.
+    # Fase 2: adquirir, parsear, aplicar guardas y fusionar. Un backfill fallido
+    # ya no interrumpe la fase: se reporta como aviso dentro del fondo.
     resultados: list[Resultado] = []
     backfills: dict[str, store.Feed] = {}
-    errores_config: list[str] = []
 
     for fund in seleccion:
-        try:
-            resultado, backfill = _procesar_fondo(fund, feeds[fund.ticker], hoy, args)
-        except BackfillError as exc:
-            errores_config.append(f"[FALLA] {fund.ticker} backfill: {exc}")
-            continue
+        resultado, backfill = _procesar_fondo(fund, feeds[fund.ticker], hoy, args)
         resultados.append(resultado)
         if backfill is not None:
             backfills[fund.ticker] = backfill
@@ -392,20 +359,14 @@ def main(argv: list[str] | None = None) -> int:
             lineas_stdout.append(linea)
             if linea.startswith("[FALLA]"):
                 print(linea, file=sys.stderr)
-    for error in errores_config:
-        print(error, file=sys.stderr)
-
-    if errores_config:
-        _resumen_actions(lineas_stdout + errores_config)
-        return SALIDA_CONFIG
 
     # Fase 3: escribir solo lo que quedó al día (REQ-PUB-001). Con código 1 por
     # "todos los fondos fallaron" no se modifica ningún archivo (§8).
-    todo_fallo = not resultados or all(r.estado == "falla" for r in resultados)
+    todo_fallo = not resultados or all(r.estado is Estado.FALLA for r in resultados)
     error_escritura = False
     if not args.dry_run and not todo_fallo:
         for resultado in resultados:
-            if resultado.estado == "ok" and resultado.feed is not None:
+            if resultado.estado is Estado.OK and resultado.feed is not None:
                 ruta = store.feed_path(salida, resultado.fund.ticker)
                 try:
                     store.write_feed(ruta, resultado.feed)
@@ -420,8 +381,10 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 store.write_feed(ruta, feed)
             except store.FeedError as exc:
-                print(f"[FALLA] {ticker} backfill: {exc}", file=sys.stderr)
-                error_escritura = True
+                # Un backfill que no se puede escribir no invalida el feed oficial.
+                aviso = f"[AVISO] {ticker} backfill no se pudo escribir: {exc}"
+                print(aviso)
+                lineas_stdout.append(aviso)
 
         feeds_pagina: dict[str, store.Feed | None] = {}
         for fund in catalog.FUNDS:
@@ -443,8 +406,8 @@ def main(argv: list[str] | None = None) -> int:
         return SALIDA_CONFIG
     if todo_fallo:
         return SALIDA_CONFIG
-    if any(r.estado == "anomalia" for r in resultados):
+    if any(r.estado is Estado.ANOMALIA for r in resultados):
         return SALIDA_GUARDA
-    if any(r.estado == "falla" for r in resultados):
+    if any(r.estado is Estado.FALLA for r in resultados):
         return SALIDA_PARCIAL
     return SALIDA_OK

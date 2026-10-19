@@ -19,14 +19,14 @@ def test_ac01b_toma_la_serie_bolsa_del_fixture(html_independencia):
     assert quote.close == 2181.18
 
 
-def test_ac01b_fecha_derivada_en_utc_no_en_hora_de_chile():
+def test_ac01b_fecha_derivada_en_utc_no_en_hora_de_chile(html_independencia):
     assert (
         datetime.fromtimestamp(MS_15_OCT / 1000, tz=timezone.utc).date().isoformat()
         == "2026-10-15"
     )
     quote = aindependencia.parse_quote(
         html_independencia_con(
-            open("tests/fixtures/aindependencia_fondos.html", encoding="utf-8").read(),
+            html_independencia,
             [[MS_14_OCT, 2175.45], [MS_15_OCT, 2181.18]],
         )
     )
@@ -95,3 +95,22 @@ def test_cargar_no_expone_indice(monkeypatch, html_independencia):
     quote, indice = aindependencia.cargar(con_indice=True)
     assert quote.close == 2181.18
     assert indice is None
+
+
+# ── Epoch inválido en la serie BOLSA ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize("epoch", [float("nan"), float("inf"), float("-inf")])
+def test_epoch_no_finito_falla_como_source_error(html_independencia, epoch):
+    # json.loads acepta NaN/Infinity: no deben escapar como ValueError/OverflowError.
+    html = html_independencia_con(html_independencia, [[epoch, 2181.18]])
+    with pytest.raises(SourceError) as excinfo:
+        aindependencia.parse_quote(html)
+    assert "epoch inválido" in str(excinfo.value)
+
+
+def test_epoch_negativo_gigante_falla_como_source_error(html_independencia):
+    html = html_independencia_con(html_independencia, [[-(10**18), 2181.18]])
+    with pytest.raises(SourceError) as excinfo:
+        aindependencia.parse_quote(html)
+    assert "epoch inválido" in str(excinfo.value)

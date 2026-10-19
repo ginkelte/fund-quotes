@@ -38,8 +38,10 @@ def test_ac10_redondea_half_up_a_cuatro_decimales():
 
 
 def test_redondeo_half_up_no_usa_bankers():
-    # float() daría 2.675 -> 2.67; Decimal half-up da 2.6750 sin cambios de escala
-    assert normalize_close("2,6750") == 2.675
+    # 2,00005 a 4 decimales: half-up -> 2.0001. Con bankers (o float) el empate
+    # cae al par y daría 2.0000, así que este caso sí discrimina el modo.
+    assert normalize_close("2,00005") == 2.0001
+    assert normalize_close("2,00004") == 2.0
 
 
 @pytest.mark.parametrize(

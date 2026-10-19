@@ -166,8 +166,6 @@ def test_no_reintenta_un_404():
 
 
 def test_envia_user_agent_y_no_cookies():
-    opener = Opener([Respuesta(b"ok" * 10)])
-
     capturado = {}
 
     class OpenerEspia(Opener):

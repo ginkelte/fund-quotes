@@ -94,6 +94,24 @@ def _serie_bolsa(datos: dict) -> list:
     )
 
 
+def _epoch_a_ms(epoch_ms: float) -> int:
+    """Convierte el epoch en milisegundos; ``NaN``/``Infinity`` no pasan."""
+
+    try:
+        return int(epoch_ms)
+    except (ValueError, OverflowError) as exc:
+        raise SourceError(f"la serie BOLSA trae un epoch inválido: {epoch_ms!r}") from exc
+
+
+def _fecha_desde_ms(ms: int) -> date:
+    """Fecha UTC del epoch en milisegundos, con rango acotado por ``datetime``."""
+
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date()
+    except (ValueError, OverflowError, OSError) as exc:
+        raise SourceError(f"la serie BOLSA trae un epoch inválido: {ms!r}") from exc
+
+
 def parse_quote(html: str) -> Quote:
     """Toma el punto de mayor ``epoch_ms`` de la serie BOLSA (fecha en UTC)."""
 
@@ -116,7 +134,7 @@ def parse_quote(html: str) -> Quote:
             continue
         if not decimal.is_finite() or decimal <= 0:
             continue
-        ms = int(epoch_ms)
+        ms = _epoch_a_ms(epoch_ms)
         if mejor_ms is None or ms > mejor_ms:
             mejor_ms = ms
             mejor_valor = decimal
@@ -124,7 +142,7 @@ def parse_quote(html: str) -> Quote:
     if mejor_ms is None or mejor_valor is None:
         raise SourceError("la serie BOLSA no tiene puntos numéricos utilizables")
 
-    fecha: date = datetime.fromtimestamp(mejor_ms / 1000, tz=timezone.utc).date()
+    fecha = _fecha_desde_ms(mejor_ms)
     try:
         cierre = close_desde_decimal(mejor_valor)
     except QuoteFormatError as exc:
