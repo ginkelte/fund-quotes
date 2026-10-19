@@ -22,10 +22,10 @@ todos los días hábiles posteriores, por lo que PP muestra precios planos y la 
 cartera queda desactualizada. El valor que publican las fuentes el 15 de octubre de 2026
 (5.054,2279 para CFMITNIPSA) es distinto del que Yahoo sigue repitiendo (5.035,3999).
 
-| Instrumento | Ticker en PP | RUN (público) | Tipo CMF | Estado en Yahoo (verificado 2026-10-18) |
-|---|---|---|---|---|
-| FM IT NOW S&P IPSA (Itaú AGF) | `CFMITNIPSA.SN` | 9019-0 | RGFMU | Serie congelada desde 2026-07-17: repite 5035,3999 todos los días hábiles hasta 2026-10-16 |
-| FI Independencia Rentas Inmobiliarias | `CFINRENTAS.SN` | 7014-9 | FINRE | Serie congelada desde 2026-07-17: repite 2183,5600 |
+| Instrumento | Símbolo Yahoo (histórico, congelado) | Ticker en PP (nuevo) | RUN (público) | Tipo CMF | Estado en Yahoo (verificado 2026-10-18) |
+|---|---|---|---|---|---|
+| FM IT NOW S&P IPSA (Itaú AGF) | `CFMITNIPSA.SN` | `CFMITNIPSA` | 9019-0 | RGFMU | Serie congelada desde 2026-07-17: repite 5035,3999 todos los días hábiles hasta 2026-10-16 |
+| FI Independencia Rentas Inmobiliarias | `CFINRENTAS.SN` | `CFINRENTAS` | 7014-9 | FINRE | Serie congelada desde 2026-07-17: repite 2183,5600 |
 
 Hoy no existe ningún componente propio: la única fuente de precios es Yahoo, dentro de PP. No hay
 feed, ni respaldo, ni forma de detectar que la serie dejó de moverse.
@@ -118,12 +118,22 @@ Reglas normativas:
    (`ticker`, `name`, `currency`, `source`, `updated`, `data`). Dos ejecuciones con los mismos datos
    producen archivos **idénticos byte a byte** (hash SHA-256 igual).
 9. Escritura atómica: archivo temporal en el mismo directorio + `os.replace`.
+10. `currency` es siempre `CLP` para ambos fondos (no se lee de la fuente).
 
 ### 5.2 Archivo de backfill derivado: `docs/quotes/<TICKER>.backfill.json`
 
 Mismo esquema, con `source` = `ledgifi:9019#indice` y `updated` = fecha del último punto derivado.
 Solo existe si se pidió `--backfill N`. **Nunca** se mezcla con el archivo oficial: PP consume solo
 `<TICKER>.json`.
+
+`--backfill` aplica solo a fondos cuya fuente exponga serie de índice (hoy únicamente `CFMITNIPSA`).
+Para `CFINRENTAS` es no-op con advertencia `[SIN CAMBIO] CFINRENTAS backfill=no_disponible` y no
+crea archivo; no altera el código de salida.
+
+`--backfill N` con `1 ≤ N ≤ 155`; N cuenta los puntos de índice estrictamente anteriores a la fecha
+del último punto oficial, tomados desde el final de la serie. El archivo se **regenera completo** en
+cada corrida (no es append-only): dos corridas con los mismos datos producen bytes
+idénticos. Un `N` fuera de rango es error de configuración, código `1`.
 
 ### 5.3 Consumo en Portfolio Performance
 
@@ -149,6 +159,7 @@ verificar que la actualización ocurrió (ver `AC-09`).
   ambiguo (por ejemplo `1,234.56`) se rechaza, no se adivina.
 - **REQ-ADP-004** — Backfill derivado opcional (`--backfill N`): `close(d) = close_conocido ×
   índice(d) / índice(último)`, redondeado a 4 decimales, escrito solo en `<TICKER>.backfill.json`.
+  La semántica de `N`, el modo de escritura y el no-op para `CFINRENTAS` se norman en §5.2.
 
 ### Almacenamiento
 
@@ -172,7 +183,9 @@ verificar que la actualización ocurrió (ver `AC-09`).
   al día, sin tocar los demás archivos.
 - **REQ-PUB-002** — Generar `docs/index.html` autocontenido (sin JS ni assets externos) con, por
   fondo: último cierre, fecha, fuente y días hábiles transcurridos desde el último punto; alerta
-  visual si supera 3 días hábiles (L-V, sin feriados en v1).
+  visual si supera 3 días hábiles (L-V, sin feriados en v1). Días hábiles = días L-V en el intervalo
+  `(último_punto, hoy]`; alerta si > 3. `docs/index.html` no contiene fecha ni hora de generación:
+  dos corridas con los mismos feeds producen el mismo HTML byte a byte.
 
 ### Operación
 
@@ -184,18 +197,29 @@ verificar que la actualización ocurrió (ver `AC-09`).
   página de estado y las validaciones de fecha sean deterministas en tests.
 - **REQ-CI-001** — Workflow diario de GitHub Actions (lunes a viernes, cron `30 23 * * 1-5`, es decir
   20:30 en Chile en horario de verano), `workflow_dispatch` manual, `permissions: contents: write`,
-  commit solo si hay diff, y ejecución de los tests antes de publicar.
+  commit solo si hay diff, y ejecución de los tests antes de publicar. El workflow commitea y publica
+  los fondos exitosos **antes** de propagar el código de salida; después falla el job si el código es
+  ≠ 0. El commit nunca se omite por un fondo caído.
 
 ### No funcionales y seguridad
 
 - **REQ-NF-001** — Python 3.11, solo stdlib en producción; `pytest` únicamente como dev-dependency.
+  Verificación manual en CI: `python3.11 -m pytest -q` y
+  `grep -rhoE '^(from|import) [a-zA-Z0-9_.]+' fund_quotes | sort -u`
+  (todos los módulos importados deben ser de la stdlib).
 - **REQ-NF-002** — La suite corre sin red, contra fixtures guardados en `tests/fixtures/`.
 - **REQ-NF-003** — Documentación, mensajes de error y página de estado en español de Chile.
 - **REQ-SEC-001** — Sin secretos, credenciales, captcha-solving ni servicios pagos; solo URLs públicas.
+  Verificación manual en CI: `grep -rniE 'token|secret|password|api[_-]?key|captcha' fund_quotes docs .github`
+  sin coincidencias.
 - **REQ-SEC-002** — Sin datos personales en el repo público: nada de RUT, montos de cartera ni número
   de cuotas. Los RUN de los fondos son públicos y se pueden citar.
+  Verificación manual en CI: `grep -rniE '\bRUT\b|[0-9]{1,2}\.[0-9]{3}\.[0-9]{3}-[0-9kK]|cartera|cuotas' docs fund_quotes`
+  sin coincidencias.
 - **REQ-SEC-003** — Allowlist de dominios (`ledgifi.com`, `r.jina.ai`, `aindependencia.cl`), sin
   seguir redirecciones fuera de ella, tickers validados con `^[A-Z0-9]{1,15}$`, sin `eval`.
+  Se cubre con unit tests de `fetch.py`: (a) host fuera de la allowlist → error, sin emitir la
+  petición; (b) redirección hacia otro dominio → error.
 
 ## 7. Arquitectura propuesta
 
@@ -266,10 +290,12 @@ Reglas transversales:
 - Reintentos: 2 (3 intentos en total), backoff de 5 s y 15 s, timeout 30 s, tope de 2 MB por respuesta.
 - Formato de salida por fondo (una línea, español de Chile):
   `[OK] CFMITNIPSA fecha=2026-10-15 close=5054.2279 fuente=ledgifi:9019`,
-  `[SIN CAMBIOS] ...`, `[ANOMALIA] CFINRENTAS variacion=+10,03% umbral=5,00% fecha=2026-10-15`,
+  `[SIN CAMBIOS] ...`, `[ANOMALIA] CFINRENTAS variacion=+10,32% umbral=5,00% fecha=2026-10-15`,
   `[FALLA] CFMITNIPSA fuente=ledgifi:9019 motivo=<accionable>`.
 - En GitHub Actions el resumen se agrega a `$GITHUB_STEP_SUMMARY`; los fallos no se silencian con
   `continue-on-error`.
+- El workflow commitea y publica los fondos exitosos **antes** de propagar el código de salida;
+  después falla el job si el código es ≠ 0. El commit nunca se omite por un fondo caído.
 
 | ID | Caso borde | Comportamiento |
 |---|---|---|
@@ -279,7 +305,7 @@ Reglas transversales:
 | EC-004 | No existe feed previo | Se crea con el punto de la fuente; la guarda de anomalía no aplica por falta de referencia |
 | EC-005 | Respuesta con "Vercel Security Checkpoint", status 429, o cuerpo menor a 10 KB | Se trata como bloqueo: reintenta y luego falla ruidosamente |
 | EC-006 | Valor con notación científica, sin decimales, o formato ambiguo (`1,234.56`) | Se rechaza por formato (`REQ-ADP-003`), no se adivina |
-| EC-007 | La fuente trae varios días nuevos en una sola corrida | Se agregan todos en orden, cada uno validado contra el punto anterior de la secuencia |
+| EC-007 | Cada adaptador entrega exactamente un punto por corrida | El escenario de varios días nuevos no aplica en v1 (queda fuera de alcance) |
 | EC-008 | Falla de escritura (permisos, disco lleno) | El archivo original queda intacto; código `1` |
 
 ## 9. Seguridad y límites
@@ -309,7 +335,7 @@ Los criterios son normativos; `specs/fund-quotes.feature` es su versión ejecuta
 **AC-01 — Se publica la fecha real de la fuente, no la de ejecución**
 - Dado un feed de `CFMITNIPSA` cuyo último punto es 2026-10-14 con cierre 5054.0853
 - Y la Fuente A publica `$5.054,2279` al `15 de octubre de 2026`
-- Cuando el pipeline corre con fecha simulada 2026-10-19
+- Cuando el pipeline corre con `--fondo CFMITNIPSA` y fecha simulada 2026-10-19
 - Entonces el feed gana un punto con fecha 2026-10-15 y cierre 5054.2279
 - Y el campo `updated` queda en 2026-10-15
 - Y para `CFINRENTAS` la fecha del punto se deriva del epoch en UTC
@@ -317,7 +343,7 @@ Los criterios son normativos; `specs/fund-quotes.feature` es su versión ejecuta
 
 **AC-02 — Idempotencia: dos corridas el mismo día no modifican el feed**
 - Dado un feed de `CFMITNIPSA` ya actualizado al 2026-10-15
-- Cuando el pipeline corre dos veces con la misma fecha simulada
+- Cuando el pipeline corre dos veces con `--fondo CFMITNIPSA` y la misma fecha simulada
 - Entonces la segunda corrida termina con código 0
 - Y el hash SHA-256 del archivo es idéntico antes y después
 - Y no hay fechas duplicadas
@@ -332,8 +358,8 @@ Los criterios son normativos; `specs/fund-quotes.feature` es su versión ejecuta
 **AC-04 — Una fuente sin la cuota esperada falla sin inventar datos**
 - Dado un HTML de la Fuente A sin la fila de la serie `UNICA` con `Valor cuota`
 - Y un feed de `CFMITNIPSA` con 2 puntos
-- Cuando el pipeline corre
-- Entonces termina con código distinto de 0
+- Cuando el pipeline corre con `--fondo CFMITNIPSA`
+- Entonces termina con código `1`
 - Y el error indica que no se encontró la cuota de `CFMITNIPSA`
 - Y el feed conserva sus 2 puntos sin cambios
 - Y no se agrega ningún punto con la fecha de ejecución
@@ -348,8 +374,8 @@ Los criterios son normativos; `specs/fund-quotes.feature` es su versión ejecuta
 - Y el proceso termina con código 2
 
 **AC-06 — Un salto mayor a 5% se rechaza salvo override explícito**
-- Dado un feed de `CFINRENTAS` con último punto 2026-10-14 y cierre 2181.18
-- Y la fuente publica el 2026-10-15 un cierre de 2400.00 (+10,03%)
+- Dado un feed de `CFINRENTAS` con último punto 2026-10-14 y cierre 2175.45
+- Y la fuente publica el 2026-10-15 un cierre de 2400.00 (+10,32%)
 - Cuando el pipeline corre sin flags
 - Entonces el punto se rechaza, el feed queda intacto y el proceso termina con código 3
 - Y stdout reporta la anomalía con su variación y el umbral
@@ -369,6 +395,9 @@ Los criterios son normativos; `specs/fund-quotes.feature` es su versión ejecuta
   transcurridos
 - Y `CFMITNIPSA` con último punto 2026-10-15 aparece al día (2 días hábiles, sin alerta)
 - Y con último punto 2026-10-08 aparece en alerta (7 días hábiles, supera el umbral de 3)
+- Y los días hábiles se cuentan como días L-V en el intervalo `(último_punto, hoy]`, con alerta si > 3
+- Y `docs/index.html` no incluye fecha ni hora de generación, por lo que dos corridas con los mismos
+  feeds producen el mismo HTML byte a byte
 
 **AC-09 — El README documenta la configuración en Portfolio Performance**
 - Dado el `README.md` del repositorio
@@ -376,6 +405,8 @@ Los criterios son normativos; `specs/fund-quotes.feature` es su versión ejecuta
 - Entonces indica, para `CFMITNIPSA` y para `CFINRENTAS`, el proveedor "JSON" y la URL
   `https://ginkelte.github.io/fund-quotes/quotes/{TICKER}.json`
 - Y los JSONPath `$.data[*].date` y `$.data[*].close`
+- Y el instrumento en PP debe tener ticker exactamente `CFMITNIPSA`/`CFINRENTAS` (sin `.SN`),
+  porque el macro `{TICKER}` se sustituye literalmente en la URL
 - Y los pasos para verificar que PP actualizó las cotizaciones
 
 **AC-10 — Parseo correcto del formato numérico y de fecha chileno**
@@ -401,6 +432,19 @@ Los criterios son normativos; `specs/fund-quotes.feature` es su versión ejecuta
 - Y el error indica que el feed existente no se pudo leer
 - Y el archivo conserva su contenido original byte a byte
 
+**AC-13 — Contrato de serialización determinista**
+- Dado el mismo conjunto de datos procesado en dos corridas independientes
+- Cuando se serializa `docs/quotes/<TICKER>.json`
+- Entonces las claves aparecen en el orden exacto `ticker`, `name`, `currency`, `source`, `updated`, `data`
+- Y el archivo usa `indent=2`, UTF-8 sin BOM y termina con un `\n` final
+- Y el SHA-256 de ambos archivos es idéntico
+
+**AC-14 — `--dry-run` no escribe archivos**
+- Dado un feed de cada fondo ya al día y una `docs/index.html` existente
+- Cuando el pipeline corre con `--dry-run`
+- Entonces el hash SHA-256 de `docs/quotes/*.json` y de `docs/index.html` es idéntico antes y después
+- Y el proceso termina con código `0`
+
 Trazabilidad con los criterios de referencia del encargo:
 
 | AC | Criterio de referencia | Requisitos |
@@ -417,10 +461,28 @@ Trazabilidad con los criterios de referencia del encargo:
 | AC-10 | Derivado de §4.1 y §4.2 (formato de fuentes) | REQ-ADP-003 |
 | AC-11 | Derivado de §4.1 y §5.2 (backfill derivado) | REQ-ADP-004 |
 | AC-12 | Derivado de §8 (protección del feed existente) | REQ-STO-003 |
+| AC-01b | §4.2 (serie BOLSA, fecha en UTC) | REQ-ADP-002 |
+| AC-10b | §6 (formato ambiguo rechazado) | REQ-ADP-003 |
+| EC-001 | §8 (mismo día con otro valor) | REQ-STO-001 |
+| EC-002 | §8 (fecha implausible) | REQ-GRD-001 |
+| AC-13 | §5.1 reglas 7-8 (serialización determinista) | REQ-STO-004 |
+| AC-14 | §7 (`--dry-run`) | REQ-CLI-001, REQ-PUB-001 |
+| Unit tests de `fetch.py` | §9 (allowlist y redirecciones) | REQ-SEC-003 |
 
 El archivo `.feature` incluye, además, dos escenarios marcados `@borde` (mismo día con otro valor
 publicado, y fecha implausible) que no agregan criterios de aceptación nuevos: verifican reglas ya
 normadas en §8.
+
+**Verificación manual en CI (requisitos sin AC ejecutable)**
+
+| Requisito | Comando exacto | Criterio |
+|---|---|---|
+| REQ-NF-001 | `python3.11 -m pytest -q` y `grep -rhoE '^(from|import) [a-zA-Z0-9_.]+' fund_quotes \| sort -u` | Todos los módulos importados pertenecen a la stdlib |
+| REQ-SEC-001 | `grep -rniE 'token|secret|password|api[_-]?key|captcha' fund_quotes docs .github` | Sin coincidencias |
+| REQ-SEC-002 | `grep -rniE '\bRUT\b|[0-9]{1,2}\.[0-9]{3}\.[0-9]{3}-[0-9kK]|cartera|cuotas' docs fund_quotes` | Sin coincidencias |
+
+La allowlist de `REQ-SEC-003` se verifica con unit tests de `fetch.py`: host fuera de la allowlist →
+error sin petición, y redirección hacia otro dominio → error.
 
 ## 11. Fuera de alcance explícito
 

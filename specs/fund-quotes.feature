@@ -23,7 +23,7 @@ Característica: Feed de cotizaciones diarias de dos fondos chilenos
   Escenario: AC-01 la cuota se publica con la fecha de la fuente y no con la de ejecución
     Dado un feed de CFMITNIPSA con 2 puntos y último punto 2026-10-14 con cierre 5054.0853
     Y la Fuente A publica "Valor cuota" $5.054,2279 al "15 de octubre de 2026"
-    Cuando ejecuto el pipeline con la fecha simulada 2026-10-19
+    Cuando ejecuto el pipeline con "--fondo CFMITNIPSA" y la fecha simulada 2026-10-19
     Entonces docs/quotes/CFMITNIPSA.json agrega el punto 2026-10-15 con cierre 5054.2279
     Y el campo updated del feed es 2026-10-15
     Y no existe ningún punto con fecha 2026-10-19
@@ -75,7 +75,7 @@ Característica: Feed de cotizaciones diarias de dos fondos chilenos
 
   Escenario: AC-02 dos ejecuciones el mismo día no modifican el feed
     Dado un feed de CFMITNIPSA ya actualizado al 2026-10-15
-    Cuando ejecuto el pipeline dos veces con la fecha simulada 2026-10-19
+    Cuando ejecuto el pipeline dos veces con "--fondo CFMITNIPSA" y la fecha simulada 2026-10-19
     Entonces ambas ejecuciones terminan con código 0
     Y el hash SHA-256 del feed es el mismo antes y después de la segunda ejecución
     Y el feed contiene exactamente una entrada por fecha
@@ -95,7 +95,7 @@ Característica: Feed de cotizaciones diarias de dos fondos chilenos
   Escenario: EC-001 un punto del mismo día con otro valor se conserva como estaba
     Dado un feed de CFMITNIPSA cuyo último punto es 2026-10-15 con cierre 5054.2279
     Y la Fuente A publica el 2026-10-15 un cierre de 5054.5000
-    Cuando ejecuto el pipeline
+    Cuando ejecuto el pipeline con "--fondo CFMITNIPSA" y la fecha simulada 2026-10-19
     Entonces el feed conserva el cierre 5054.2279 para el 2026-10-15
     Y la salida estándar advierte que el punto ya existía con otro valor
     Y el proceso termina con código 0
@@ -116,12 +116,12 @@ Característica: Feed de cotizaciones diarias de dos fondos chilenos
   # ── REQ-GRD-001: Anomalía sobre 5% con override explícito ──
 
   Esquema del escenario: AC-06 un salto mayor a 5% se rechaza salvo con --force-anomaly
-    Dado un feed de CFINRENTAS cuyo último punto es 2026-10-14 con cierre 2181.18
+    Dado un feed de CFINRENTAS cuyo último punto es 2026-10-14 con cierre 2175.45
     Y la Fuente B publica el 2026-10-15 un cierre de 2400.00
     Cuando ejecuto el pipeline <modo>
     Entonces el proceso termina con código <codigo>
     Y el feed <resultado>
-    Y la salida estándar reporta una anomalía de +10,03% contra el umbral de 5,00%
+    Y la salida estándar reporta una anomalía de +10,32% contra el umbral de 5,00%
     Ejemplos:
       | modo                | codigo | resultado                                |
       | sin flags           | 3      | conserva 1 punto                         |
@@ -164,7 +164,7 @@ Característica: Feed de cotizaciones diarias de dos fondos chilenos
     Dado un HTML de la Fuente A que no trae la fila de la serie UNICA con "Valor cuota"
     Y un feed de CFMITNIPSA con 2 puntos
     Cuando ejecuto el pipeline para CFMITNIPSA
-    Entonces el proceso termina con un código distinto de 0
+    Entonces el proceso termina con código 1
     Y el mensaje de error indica que no se encontró la cuota de CFMITNIPSA
     Y el feed conserva sus 2 puntos sin cambios
     Y no se agrega ningún punto con la fecha de ejecución
