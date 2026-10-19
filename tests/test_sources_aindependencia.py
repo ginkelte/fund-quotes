@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from conftest import html_independencia_con
+
 from fund_quotes.sources import SourceError, aindependencia
 
 MS_15_OCT = 1792022400000
@@ -21,7 +21,7 @@ def test_ac01b_toma_la_serie_bolsa_del_fixture(html_independencia):
 
 def test_ac01b_fecha_derivada_en_utc_no_en_hora_de_chile(html_independencia):
     assert (
-        datetime.fromtimestamp(MS_15_OCT / 1000, tz=timezone.utc).date().isoformat()
+        datetime.fromtimestamp(MS_15_OCT / 1000, tz=UTC).date().isoformat()
         == "2026-10-15"
     )
     quote = aindependencia.parse_quote(

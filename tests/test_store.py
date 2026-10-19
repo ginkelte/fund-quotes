@@ -7,8 +7,8 @@ import json
 from datetime import date
 
 import pytest
-
 from conftest import feed_de, puntos_habiles
+
 from fund_quotes import catalog, store
 from fund_quotes.quote import Quote
 

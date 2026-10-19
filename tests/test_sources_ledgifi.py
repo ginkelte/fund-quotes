@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-
 from conftest import tabla_ledgifi
+
 from fund_quotes.sources import SourceError, ledgifi
 
 

@@ -69,7 +69,7 @@ def validar_url(url: str) -> None:
 class _RedirectAcotado(urllib.request.HTTPRedirectHandler):
     """Redirecciones solo dentro de la allowlist."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         try:
             validar_url(newurl)
         except FetchError as exc:

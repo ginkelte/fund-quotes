@@ -55,7 +55,7 @@ def test_formato_pct_chileno():
     assert guards.formato_pct(Decimal("10.32"), signo=True) == "+10,32%"
     assert guards.formato_pct(Decimal("5.00")) == "5,00%"
     assert guards.formato_pct(Decimal("-1.5")) == "-1,50%"
-    assert guards.formato_pct(Decimal("0")) == "0,00%"
+    assert guards.formato_pct(Decimal(0)) == "0,00%"
 
 
 def test_fecha_de_manana_es_aceptable():

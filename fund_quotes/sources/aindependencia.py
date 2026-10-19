@@ -8,7 +8,7 @@ La fecha se deriva del epoch en UTC (no en hora de Chile), según §4.2.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 
 from ..fetch import fetch_text
@@ -107,7 +107,7 @@ def _fecha_desde_ms(ms: int) -> date:
     """Fecha UTC del epoch en milisegundos, con rango acotado por ``datetime``."""
 
     try:
-        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date()
+        return datetime.fromtimestamp(ms / 1000, tz=UTC).date()
     except (ValueError, OverflowError, OSError) as exc:
         raise SourceError(f"la serie BOLSA trae un epoch inválido: {ms!r}") from exc
 
