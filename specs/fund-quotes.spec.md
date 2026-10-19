@@ -127,13 +127,15 @@ Solo existe si se pidió `--backfill N`. **Nunca** se mezcla con el archivo ofic
 `<TICKER>.json`.
 
 `--backfill` aplica solo a fondos cuya fuente exponga serie de índice (hoy únicamente `CFMITNIPSA`).
-Para `CFINRENTAS` es no-op con advertencia `[SIN CAMBIO] CFINRENTAS backfill=no_disponible` y no
+Para `CFINRENTAS` es no-op con advertencia `[SIN CAMBIOS] CFINRENTAS backfill=no_disponible` y no
 crea archivo; no altera el código de salida.
 
 `--backfill N` con `1 ≤ N ≤ 155`; N cuenta los puntos de índice estrictamente anteriores a la fecha
 del último punto oficial, tomados desde el final de la serie. El archivo se **regenera completo** en
 cada corrida (no es append-only): dos corridas con los mismos datos producen bytes
 idénticos. Un `N` fuera de rango es error de configuración, código `1`.
+Si `N` excede la cantidad de puntos de índice estrictamente anteriores a la fecha del último punto
+oficial, es error de configuración, código `1` (no se recorta a los disponibles).
 
 ### 5.3 Consumo en Portfolio Performance
 
@@ -185,7 +187,7 @@ verificar que la actualización ocurrió (ver `AC-09`).
   fondo: último cierre, fecha, fuente y días hábiles transcurridos desde el último punto; alerta
   visual si supera 3 días hábiles (L-V, sin feriados en v1). Días hábiles = días L-V en el intervalo
   `(último_punto, hoy]`; alerta si > 3. `docs/index.html` no contiene fecha ni hora de generación:
-  dos corridas con los mismos feeds producen el mismo HTML byte a byte.
+  dos corridas con los mismos feeds **y la misma fecha `--today`** producen el mismo HTML byte a byte.
 
 ### Operación
 
@@ -397,7 +399,7 @@ Los criterios son normativos; `specs/fund-quotes.feature` es su versión ejecuta
 - Y con último punto 2026-10-08 aparece en alerta (7 días hábiles, supera el umbral de 3)
 - Y los días hábiles se cuentan como días L-V en el intervalo `(último_punto, hoy]`, con alerta si > 3
 - Y `docs/index.html` no incluye fecha ni hora de generación, por lo que dos corridas con los mismos
-  feeds producen el mismo HTML byte a byte
+  feeds **y la misma fecha simulada** producen el mismo HTML byte a byte
 
 **AC-09 — El README documenta la configuración en Portfolio Performance**
 - Dado el `README.md` del repositorio

@@ -200,3 +200,20 @@ Característica: Feed de cotizaciones diarias de dos fondos chilenos
     Entonces indica el proveedor "JSON" y una URL con el patrón "https://ginkelte.github.io/fund-quotes/quotes/{TICKER}.json" para cada instrumento
     Y indica los JSONPath "$.data[*].date" y "$.data[*].close"
     Y describe cómo verificar que Portfolio Performance quedó actualizando
+
+  # ════════════════════════════════════════════════════════════
+  # CONTRATO DE SERIALIZACIÓN Y DRY-RUN — REQ-STO-004 / REQ-CLI-001
+  # ════════════════════════════════════════════════════════════
+
+  Escenario: AC-13 dos serializaciones de los mismos datos son idénticas byte a byte
+    Dado el mismo conjunto de datos
+    Cuando se serializa docs/quotes/CFMITNIPSA.json en cada corrida
+    Entonces las claves aparecen en el orden exacto ticker, name, currency, source, updated, data
+    Y el archivo usa indent=2, UTF-8 sin BOM y termina con un salto de línea final
+    Y el hash SHA-256 de ambos archivos es idéntico
+
+  Escenario: AC-14 --dry-run no escribe archivos
+    Dado un feed de cada fondo ya al día y una docs/index.html existente
+    Cuando ejecuto el pipeline con "--dry-run"
+    Entonces el hash SHA-256 de docs/quotes/CFMITNIPSA.json, docs/quotes/CFINRENTAS.json y docs/index.html es idéntico antes y después
+    Y el proceso termina con código 0
