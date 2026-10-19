@@ -53,7 +53,7 @@ def _normalizar(texto: str) -> str:
 
 
 class _Celda:
-    __slots__ = ("tag", "texto", "sr", "partes", "profundidad", "parte", "sr_prof")
+    __slots__ = ("parte", "partes", "profundidad", "sr", "sr_prof", "tag", "texto")
 
     def __init__(self, tag: str) -> None:
         self.tag = tag
@@ -75,7 +75,7 @@ class _TablaParser(HTMLParser):
         self._fila: list[_Celda] | None = None
         self._celda: _Celda | None = None
 
-    def handle_starttag(self, tag, attrs):  # noqa: D401
+    def handle_starttag(self, tag, attrs):
         if tag == "table":
             self._pila.append({"header": [], "rows": []})
             return
@@ -100,10 +100,10 @@ class _TablaParser(HTMLParser):
                 if "sr-only" in clases and celda.sr_prof == 0:
                     celda.sr_prof = celda.profundidad
 
-    def handle_startendtag(self, tag, attrs):  # noqa: D401
+    def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
 
-    def handle_endtag(self, tag):  # noqa: D401
+    def handle_endtag(self, tag):
         if tag == "table":
             if self._pila:
                 self.tablas.append(self._pila.pop())
@@ -131,7 +131,7 @@ class _TablaParser(HTMLParser):
                 celda.parte = None
             celda.profundidad = max(0, celda.profundidad - 1)
 
-    def handle_data(self, data):  # noqa: D401
+    def handle_data(self, data):
         celda = self._celda
         if celda is None:
             return

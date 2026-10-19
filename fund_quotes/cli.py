@@ -210,9 +210,11 @@ def _procesar_fondo(
                 feed=existente,
                 quote=quote,
                 lineas=[
-                    f"[ANOMALIA] {fund.ticker} fecha={quote.date.isoformat()} "
-                    f"close={_close_txt(quote.close)} motivo=fecha implausible "
-                    f"(posterior a {limite})"
+                    (
+                        f"[ANOMALIA] {fund.ticker} fecha={quote.date.isoformat()} "
+                        f"close={_close_txt(quote.close)} motivo=fecha implausible "
+                        f"(posterior a {limite})"
+                    )
                 ],
             ),
             None,
@@ -302,8 +304,7 @@ def _resumen_actions(lineas: list[str]) -> None:
     try:
         with open(ruta, "a", encoding="utf-8") as manejador:
             manejador.write("## Feed de cotizaciones\n\n")
-            for linea in lineas:
-                manejador.write(f"- `{linea}`\n")
+            manejador.writelines(f"- `{linea}`\n" for linea in lineas)
             manejador.write("\n")
     except OSError:
         pass

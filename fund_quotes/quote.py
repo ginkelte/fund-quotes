@@ -11,9 +11,9 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-MAX_CLOSE = Decimal("10000000")
+MAX_CLOSE = Decimal(10000000)
 _CUATRO_DECIMALES = Decimal("0.0001")
 
 _MESES = {

@@ -32,10 +32,15 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Instalar dependencias de desarrollo
-        run: pip install "pytest>=7,<9" ruff
+        # Versiones pinneadas: CI y local deben usar exactamente el mismo ruff, o
+        # los hallazgos del linter divergen (ruff cambia su set de reglas por defecto
+        # entre versiones menores).
+        run: pip install "pytest>=7,<9" "ruff==0.17.1"
 
       - name: Revisar el estilo con ruff
-        run: ruff check .
+        run: |
+          ruff --version
+          ruff check .
 
       - name: Correr los tests
         run: python -m pytest -q

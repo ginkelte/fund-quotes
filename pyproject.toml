@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7,<9", "ruff"]
+dev = ["pytest>=7,<9", "ruff==0.17.1"]
 
 [tool.setuptools]
 packages = ["fund_quotes", "fund_quotes.sources"]

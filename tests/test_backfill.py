@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 import pytest
 
@@ -82,7 +82,7 @@ def test_n_fuera_de_rango_levanta_backfill_error(n):
 
 
 def test_indice_con_un_solo_punto_no_alcanza():
-    indice = [IndexPoint(date=DIA, value=Decimal("100"))]
+    indice = [IndexPoint(date=DIA, value=Decimal(100))]
     with pytest.raises(BackfillError) as excinfo:
         construir_backfill(_feed(), indice, 1, FUND)
     assert "excede los 0 puntos" in str(excinfo.value)
@@ -91,14 +91,14 @@ def test_indice_con_un_solo_punto_no_alcanza():
 def test_fechas_duplicadas_no_duplican_puntos_y_gana_la_ultima():
     indice = _indice(5)
     repetida = DIA - timedelta(days=2)
-    indice.insert(3, IndexPoint(date=repetida, value=Decimal("999")))
+    indice.insert(3, IndexPoint(date=repetida, value=Decimal(999)))
 
     feed = construir_backfill(_feed(), indice, 3, FUND)
 
     fechas = [punto.date for punto in feed.data]
     assert len(fechas) == 3 and len(set(fechas)) == 3
     duplicado = next(punto for punto in feed.data if punto.date == repetida)
-    esperado = _esperado(5054.2279, Decimal("999"), indice[-1].value)
+    esperado = _esperado(5054.2279, Decimal(999), indice[-1].value)
     assert Decimal(str(duplicado.close)) == esperado
 
 
@@ -110,8 +110,8 @@ def test_sin_punto_oficial_levanta_backfill_error():
 
 def test_indice_sin_la_fecha_del_ultimo_punto_falla():
     indice = [
-        IndexPoint(date=DIA - timedelta(days=2), value=Decimal("100")),
-        IndexPoint(date=DIA - timedelta(days=1), value=Decimal("110")),
+        IndexPoint(date=DIA - timedelta(days=2), value=Decimal(100)),
+        IndexPoint(date=DIA - timedelta(days=1), value=Decimal(110)),
     ]
     with pytest.raises(BackfillError) as excinfo:
         construir_backfill(_feed(), indice, 1, FUND)
@@ -120,8 +120,8 @@ def test_indice_sin_la_fecha_del_ultimo_punto_falla():
 
 def test_indice_cero_en_la_fecha_oficial_falla():
     indice = [
-        IndexPoint(date=DIA - timedelta(days=1), value=Decimal("90")),
-        IndexPoint(date=DIA, value=Decimal("0")),
+        IndexPoint(date=DIA - timedelta(days=1), value=Decimal(90)),
+        IndexPoint(date=DIA, value=Decimal(0)),
     ]
     with pytest.raises(BackfillError) as excinfo:
         construir_backfill(_feed(), indice, 1, FUND)

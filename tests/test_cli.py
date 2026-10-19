@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import date, datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import UTC, date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import pytest
-
 from conftest import (
     correr,
     escribir_feed,
@@ -18,6 +17,7 @@ from conftest import (
     puntos_habiles,
     tabla_ledgifi,
 )
+
 from fund_quotes.fetch import FetchError
 
 HOY = "2026-10-19"
@@ -219,7 +219,7 @@ def test_ac11_backfill_no_contamina_el_feed_oficial(tmp_path, fuentes, capsys):
         tmp_path / "quotes" / "CFMITNIPSA.json",
         feed_de("CFMITNIPSA", [(date(2026, 10, 15), 5054.2279)]),
     )
-    codigo, out, _ = correr(_args(tmp_path, "--backfill", "30", fondo="CFMITNIPSA"), capsys)
+    codigo, _, _ = correr(_args(tmp_path, "--backfill", "30", fondo="CFMITNIPSA"), capsys)
 
     oficial = leer_json(ruta)
     derivado = leer_json(tmp_path / "quotes" / "CFMITNIPSA.backfill.json")
@@ -422,7 +422,7 @@ def test_ec001_mismo_dia_con_otro_valor_advierte_y_conserva(tmp_path, fuentes, c
 
 
 def test_ec002_fecha_futura_se_rechaza(tmp_path, fuentes, capsys, html_independencia):
-    futuro = int(datetime(2026, 10, 25, tzinfo=timezone.utc).timestamp() * 1000)
+    futuro = int(datetime(2026, 10, 25, tzinfo=UTC).timestamp() * 1000)
     fuentes["b"] = html_independencia_con(html_independencia, [[futuro, 2181.18]])
     ruta = escribir_feed(
         tmp_path / "quotes" / "CFINRENTAS.json",
@@ -475,7 +475,7 @@ def test_ticker_desconocido_es_error_de_configuracion(tmp_path, fuentes, capsys)
 
 @pytest.mark.parametrize("ticker", ["cfmitnipsa", "CFMITNIPSA.SN", "../evil", ""])
 def test_ticker_invalido_es_error_de_configuracion(tmp_path, fuentes, capsys, ticker):
-    codigo, _, err = correr(_args(tmp_path, fondo=ticker), capsys)
+    codigo, _, _ = correr(_args(tmp_path, fondo=ticker), capsys)
     assert codigo == 1
 
 
