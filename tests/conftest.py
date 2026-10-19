@@ -24,6 +24,16 @@ def html_independencia() -> str:
     return (FIXTURES / "aindependencia_fondos.html").read_text(encoding="utf-8")
 
 
+@pytest.fixture(autouse=True)
+def raiz_repo_temporal(tmp_path, monkeypatch):
+    """Autoriza ``tmp_path`` como raíz del repo: los tests escriben ahí (§9)."""
+
+    from fund_quotes import cli
+
+    monkeypatch.setattr(cli, "RAIZ_REPO", tmp_path)
+    return tmp_path
+
+
 @pytest.fixture
 def fuentes(monkeypatch, html_ledgifi, html_independencia):
     """Reemplaza la descarga real por los fixtures guardados."""

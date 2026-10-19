@@ -62,7 +62,7 @@ def validar_url(url: str) -> None:
             f"host fuera de la allowlist: {host or '(vacío)'}; "
             f"permitidos: {', '.join(sorted(ALLOWED_HOSTS))}"
         )
-    if partes.username or partes.password:
+    if "@" in partes.netloc:
         raise FetchError("URL rechazada: no se permiten credenciales embebidas")
 
 

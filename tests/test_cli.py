@@ -6,6 +6,7 @@ import hashlib
 import json
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
 
 import pytest
 
@@ -496,3 +497,43 @@ def test_all_failed_devuelve_1(tmp_path, fuentes, capsys):
     fuentes["error_b"] = FetchError("sin red")
     codigo, _, _ = correr(_args(tmp_path), capsys)
     assert codigo == 1
+    assert not (tmp_path / "index.html").exists()
+
+
+def test_all_failed_no_modifica_ningun_archivo(tmp_path, fuentes, capsys):
+    """§8: código 1 por "todos los fondos fallaron" deja todo intacto."""
+
+    ruta_a = escribir_feed(
+        tmp_path / "quotes" / "CFMITNIPSA.json",
+        feed_de("CFMITNIPSA", [(date(2026, 10, 14), 5054.0853)]),
+    )
+    ruta_b = escribir_feed(
+        tmp_path / "quotes" / "CFINRENTAS.json",
+        feed_de("CFINRENTAS", [(date(2026, 10, 14), 2175.45)]),
+    )
+    pagina = tmp_path / "index.html"
+    pagina.write_text("anterior", encoding="utf-8")
+    hashes = {ruta: _hash(ruta) for ruta in (ruta_a, ruta_b, pagina)}
+
+    fuentes["error_a"] = FetchError("sin red")
+    fuentes["error_b"] = FetchError("sin red")
+    codigo, _, err = correr(_args(tmp_path), capsys)
+
+    assert codigo == 1
+    assert {ruta: _hash(ruta) for ruta in hashes} == hashes
+    assert "[FALLA]" in err
+
+
+@pytest.mark.parametrize("flag", ["--out", "--status-page"])
+def test_ruta_fuera_del_repo_se_rechaza(tmp_path, fuentes, capsys, flag):
+    """§9: una ruta absoluta fuera de la raíz es error de configuración."""
+
+    destino = Path("/tmp") / f"fund-quotes-fuera-{flag.strip('-')}"
+    argumentos = ["--today", HOY]
+    argumentos += [flag, str(destino)]
+
+    codigo, _, err = correr(argumentos, capsys)
+
+    assert codigo == 1
+    assert "fuera de la raíz" in err
+    assert not destino.exists()

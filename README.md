@@ -47,8 +47,9 @@ un feed propio, de modo que la actualización ya no depende de Yahoo.
 
 ## Cómo se actualiza
 
-Una GitHub Action (`.github/workflows/daily.yml`) corre **de lunes a viernes a las 22:30 UTC**
-(después del cierre de los fondos en Chile). También se puede lanzar a mano desde la pestaña
+Una GitHub Action (`.github/workflows/daily.yml`) corre **de lunes a viernes a las 23:30 UTC**
+(20:30 en Chile, horario de verano, después del cierre y de que la cuota del día esté publicada).
+También se puede lanzar a mano desde la pestaña
 *Actions* → *Cotizaciones diarias* → *Run workflow*.
 
 El workflow, en orden: instala Python 3.11 y `pytest`, corre la suite, actualiza el feed, commitea y

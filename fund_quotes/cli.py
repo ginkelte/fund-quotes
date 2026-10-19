@@ -23,6 +23,10 @@ from .sources import SourceError, aindependencia, ledgifi
 ZONA = ZoneInfo("America/Santiago")
 ADAPTADORES = {"ledgifi": ledgifi, "aindependencia": aindependencia}
 
+# Raíz bajo la cual deben quedar todas las rutas de escritura (§9). Se detecta
+# desde el paquete (``<repo>/fund_quotes/cli.py``) y los tests la reemplazan.
+RAIZ_REPO = Path(__file__).resolve().parent.parent
+
 SALIDA_OK = 0
 SALIDA_CONFIG = 1
 SALIDA_PARCIAL = 2
@@ -108,10 +112,16 @@ def _hoy(texto: str | None) -> date:
 
 
 def _ruta_segura(texto: str, etiqueta: str) -> Path:
+    """Resuelve la ruta y exige que quede dentro de la raíz del repo (REQ-SEC-001/§9)."""
+
     ruta = Path(texto)
     if ".." in ruta.parts:
         raise ValueError(f"{etiqueta} no puede contener '..': {texto}")
-    return ruta
+    raiz = RAIZ_REPO.resolve()
+    destino = ruta.resolve()
+    if destino != raiz and not destino.is_relative_to(raiz):
+        raise ValueError(f"{etiqueta} queda fuera de la raíz del repo ({raiz}): {texto}")
+    return destino
 
 
 def _seleccion(valores: list[list[str]] | None) -> list[Fund]:
@@ -389,9 +399,11 @@ def main(argv: list[str] | None = None) -> int:
         _resumen_actions(lineas_stdout + errores_config)
         return SALIDA_CONFIG
 
-    # Fase 3: escribir solo lo que quedó al día (REQ-PUB-001).
+    # Fase 3: escribir solo lo que quedó al día (REQ-PUB-001). Con código 1 por
+    # "todos los fondos fallaron" no se modifica ningún archivo (§8).
+    todo_fallo = not resultados or all(r.estado == "falla" for r in resultados)
     error_escritura = False
-    if not args.dry_run:
+    if not args.dry_run and not todo_fallo:
         for resultado in resultados:
             if resultado.estado == "ok" and resultado.feed is not None:
                 ruta = store.feed_path(salida, resultado.fund.ticker)
@@ -429,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if error_escritura:
         return SALIDA_CONFIG
-    if not resultados or all(r.estado == "falla" for r in resultados):
+    if todo_fallo:
         return SALIDA_CONFIG
     if any(r.estado == "anomalia" for r in resultados):
         return SALIDA_GUARDA

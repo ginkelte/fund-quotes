@@ -1,9 +1,10 @@
 name: Cotizaciones diarias
 
-# Corre de lunes a viernes a las 22:30 UTC, después del cierre de los fondos en Chile.
+# Corre de lunes a viernes a las 23:30 UTC (20:30 en Chile, horario de verano), después
+# del cierre de los fondos y de que la cuota del día esté publicada.
 on:
   schedule:
-    - cron: "30 22 * * 1-5"
+    - cron: "30 23 * * 1-5"
   workflow_dispatch:
 
 permissions:
