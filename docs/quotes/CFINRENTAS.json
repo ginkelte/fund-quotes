@@ -1,0 +1,13 @@
+{
+  "ticker": "CFINRENTAS",
+  "name": "FI Independencia Rentas Inmobiliarias",
+  "currency": "CLP",
+  "source": "aindependencia:bolsa",
+  "updated": "2026-10-15",
+  "data": [
+    {
+      "date": "2026-10-15",
+      "close": 2181.18
+    }
+  ]
+}

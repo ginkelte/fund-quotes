@@ -1,0 +1,73 @@
+name: Cotizaciones diarias
+
+# Corre de lunes a viernes a las 22:30 UTC, después del cierre de los fondos en Chile.
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fund-quotes-daily
+  cancel-in-progress: false
+
+jobs:
+  actualizar:
+    name: Actualizar feed y publicar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar pytest
+        run: pip install pytest
+
+      - name: Correr los tests
+        run: python -m pytest -q
+
+      # El código de salida se guarda y se propaga recién al final, para que el
+      # commit de los fondos exitosos nunca se omita por un fondo caído.
+      - name: Actualizar el feed
+        id: feed
+        run: |
+          set +e
+          python -m fund_quotes --out docs/quotes --status-page docs/index.html
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "El feed terminó con código $code"
+
+      - name: Commitear y publicar si hay cambios
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(git status --porcelain -- docs)" ]; then
+            echo "Sin cambios en docs/: no se commitea nada"
+            exit 0
+          fi
+          git add docs
+          git commit -m "chore: cotizaciones $(date -u +%Y-%m-%d)"
+          git push
+
+      - name: Propagar el código de salida del feed
+        if: always()
+        env:
+          CODE: ${{ steps.feed.outputs.exit_code }}
+        run: |
+          if [ -z "$CODE" ]; then
+            echo "::error::La corrida del feed no dejó un código de salida; revisar el paso anterior"
+            exit 1
+          fi
+          if [ "$CODE" != "0" ]; then
+            echo "::error::El feed terminó con código $CODE. Los fondos exitosos ya quedaron commiteados y publicados."
+            exit "$CODE"
+          fi
+          echo "Feed al día (código 0)"

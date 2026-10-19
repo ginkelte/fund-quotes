@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es-CL">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estado del feed de cotizaciones</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 2rem 1.25rem; background: #0d1117; color: #e6edf3;
+         font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 60rem; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 .35rem; }
+  p.sub { color: #8b949e; margin: 0 0 1.75rem; font-size: .95rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+  caption { text-align: left; color: #8b949e; padding-bottom: .6rem; }
+  th { text-align: left; font-weight: 600; color: #8b949e; border-bottom: 1px solid #30363d;
+        padding: .55rem .6rem; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+  td { padding: .65rem .6rem; border-bottom: 1px solid #21262d; vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  code { background: #161b22; border: 1px solid #30363d; border-radius: 4px;
+          padding: .1rem .35rem; font-size: .85em; }
+  tr.al-dia td:last-child { color: #3fb950; }
+  tr.alerta td:last-child { color: #f85149; font-weight: 600; }
+  tr.alerta td { background: #1f1113; }
+  footer { margin-top: 2rem; color: #8b949e; font-size: .85rem; line-height: 1.6; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Estado del feed de cotizaciones</h1>
+  <p class="sub">Último punto publicado por fuente, con la antigüedad en días hábiles (lunes a viernes).</p>
+  <table>
+    <caption>Fondos del catálogo</caption>
+    <thead>
+      <tr>
+        <th scope="col">Fondo</th>
+        <th scope="col">Ticker</th>
+        <th scope="col">Último cierre</th>
+        <th scope="col">Fecha</th>
+        <th scope="col">Fuente</th>
+        <th scope="col">Días hábiles</th>
+        <th scope="col">Estado</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="al-dia">
+        <td>FM IT NOW S&amp;P IPSA</td>
+        <td><code>CFMITNIPSA</code></td>
+        <td class="num">5.054,2279</td>
+        <td>2026-10-15</td>
+        <td>ledgifi:9019</td>
+        <td class="num">2</td>
+        <td>Al día: 2 días hábiles desde el último punto</td>
+      </tr>
+      <tr class="al-dia">
+        <td>FI Independencia Rentas Inmobiliarias</td>
+        <td><code>CFINRENTAS</code></td>
+        <td class="num">2.181,18</td>
+        <td>2026-10-15</td>
+        <td>aindependencia:bolsa</td>
+        <td class="num">2</td>
+        <td>Al día: 2 días hábiles desde el último punto</td>
+      </tr>
+    </tbody>
+  </table>
+  <footer>
+    La alerta se activa cuando pasan más de 3 días hábiles desde el último punto.
+    Los días hábiles se cuentan de lunes a viernes, sin feriados.
+    Los cierres están en pesos chilenos (CLP).
+  </footer>
+</main>
+</body>
+</html>
