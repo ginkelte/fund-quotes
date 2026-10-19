@@ -1,0 +1,13 @@
+{
+  "ticker": "CFMITNIPSA",
+  "name": "FM IT NOW S&P IPSA",
+  "currency": "CLP",
+  "source": "ledgifi:9019",
+  "updated": "2026-10-15",
+  "data": [
+    {
+      "date": "2026-10-15",
+      "close": 5054.2279
+    }
+  ]
+}
