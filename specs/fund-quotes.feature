@@ -217,3 +217,24 @@ Característica: Feed de cotizaciones diarias de dos fondos chilenos
     Cuando ejecuto el pipeline con "--dry-run"
     Entonces el hash SHA-256 de docs/quotes/CFMITNIPSA.json, docs/quotes/CFINRENTAS.json y docs/index.html es idéntico antes y después
     Y el proceso termina con código 0
+
+  # ════════════════════════════════════════════════════════════
+  # CATCH-UP Y SIEMBRA DE HISTORIA — REQ-STO-001 / REQ-ADP-001 / REQ-CLI-001
+  # ════════════════════════════════════════════════════════════
+
+  Escenario: AC-15 el catch-up rellena los días faltantes dentro del rango publicado
+    Dado un feed de CFINRENTAS con los puntos 2026-10-15, 2026-10-19 y 2026-10-22
+    Y una fuente que entrega esos mismos puntos más 2026-10-16, 2026-10-20 y 2026-10-21
+    Cuando ejecuto el pipeline con "--fondo CFINRENTAS"
+    Entonces el feed queda con 6 puntos ascendentes y sin fechas duplicadas
+    Y los puntos 2026-10-15, 2026-10-19 y 2026-10-22 conservan su valor original
+    Y la salida incluye un aviso de días faltantes rellenados dentro del rango ya publicado
+
+  Escenario: AC-16 la siembra de historia crea el feed con N días hábiles
+    Dado que no existe docs/quotes/CFMITNIPSA.json
+    Y la fuente entrega la serie diaria completa
+    Cuando ejecuto el pipeline con "--sembrar-historia 120"
+    Entonces el feed se crea con los 120 días hábiles más recientes de la fuente
+    Y el archivo usa indent=2, UTF-8 sin BOM y termina con un salto de línea final
+    Y la salida incluye un aviso de siembra con la fecha inicial y la final
+    Y si el feed ya existe la siembra es no-op y el archivo no se modifica

@@ -19,7 +19,7 @@ from .quote import MAX_CLOSE, Quote
 
 KEYS = ("ticker", "name", "currency", "source", "updated", "data")
 CURRENCY = "CLP"
-_TOLERANCIA = 1e-6
+_TOLERANCIA = 0.005
 
 
 class FeedError(Exception):
@@ -209,6 +209,19 @@ class MergeResult:
     descartados: list[Quote]
 
 
+def primer_conflicto(
+    existente: Feed, nuevos: Iterable[Quote]
+) -> tuple[Quote, Quote] | None:
+    """(valor guardado, valor publicado) del primer punto con la misma fecha y otro valor."""
+
+    por_fecha = {punto.date: punto for punto in existente.data}
+    for punto in _normalizar_serie(nuevos):
+        previo = por_fecha.get(punto.date)
+        if previo is not None and abs(previo.close - punto.close) > _TOLERANCIA:
+            return previo, punto
+    return None
+
+
 def clasificar(existente: Feed | None, nuevos: Iterable[Quote]) -> str:
     """Estado de un lote que no agrega puntos: ``conflicto``, ``antiguo`` o ``sin_cambios``."""
 
@@ -256,16 +269,20 @@ def merge(
     if not serie:
         return MergeResult(feed=existente, estado="sin_cambios", agregados=[], descartados=[])
 
-    ultimo = existente.data[-1]
+    primera = existente.data[0].date
     por_fecha = {punto.date: punto for punto in existente.data}
     agregados: list[Quote] = []
     descartados: list[Quote] = []
     for punto in serie:
-        if punto.date in por_fecha or punto.date < ultimo.date:
+        # Catch-up: entra toda fecha desconocida dentro del rango ya cubierto
+        # (rellena huecos por corridas caídas) y toda fecha posterior al último
+        # punto. Solo se descarta lo anterior al inicio del feed.
+        if punto.date in por_fecha or punto.date < primera:
             descartados.append(punto)
             continue
         agregados.append(punto)
         por_fecha[punto.date] = punto
+    agregados.sort(key=lambda punto: punto.date)
 
     if not agregados:
         return MergeResult(
@@ -275,7 +292,7 @@ def merge(
             descartados=descartados,
         )
 
-    datos = list(existente.data) + agregados
+    datos = sorted(list(existente.data) + agregados, key=lambda punto: punto.date)
     fusionado = Feed(
         ticker=existente.ticker,
         name=existente.name,

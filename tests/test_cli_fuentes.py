@@ -44,17 +44,20 @@ def test_cfinrentas_publica_con_dividendera_como_primaria(
     datos = leer_json(ruta)
     assert codigo == 0
     assert err == ""
-    assert datos["data"][:2] == [
-        {"date": "2026-10-15", "close": 2181.18},
-        {"date": "2026-10-19", "close": 2169.08},
-    ]
+    # Catch-up: se rellena el hueco 16-10 → 19-10 con la serie de dividendera;
+    # los puntos ya publicados conservan su valor exacto.
+    assert datos["data"][0] == {"date": "2026-10-15", "close": 2181.18}
+    assert [punto["date"] for punto in datos["data"]][-1] == "2026-10-22"
+    assert {"date": "2026-10-19", "close": 2169.08} in datos["data"]
+    fechas = [punto["date"] for punto in datos["data"]]
+    assert fechas == sorted(fechas) and len(fechas) == len(set(fechas))
     assert datos["data"][-1] == {"date": "2026-10-22", "close": 2181.73}
     assert datos["updated"] == "2026-10-22"
     assert datos["source"] == "dividendera:CFINRENTAS"
     assert (
         "[OK] CFINRENTAS fecha=2026-10-22 close=2181.73 fuente=dividendera:CFINRENTAS" in out
     )
-    assert "[AVISO]" not in out
+    assert "respaldo" not in out
     # No se consultó el respaldo: una sola petición, a la URL del nemo.
     assert fuentes["llamadas_b"] == 0
     assert fuentes["urls_d"] == ["https://www.dividendera.cl/CFINRENTAS"]
@@ -143,19 +146,21 @@ def test_cfmitnipsa_publica_con_dividendera_como_primaria(
     datos = leer_json(ruta)
     assert codigo == 0
     assert err == ""
-    assert datos["data"][:2] == [
-        {"date": "2026-10-15", "close": 5046.8},
-        {"date": "2026-10-22", "close": 4978.3},
-    ]
+    # El catch-up rellena el hueco 16-10 → 22-10 con la serie de dividendera y
+    # agrega el 23-10: el feed queda diario y sin fechas repetidas.
+    fechas = [punto["date"] for punto in datos["data"]]
+    assert fechas[0] == "2026-10-15"
+    assert fechas[-1] == "2026-10-23"
+    assert len(fechas) == len(set(fechas))
+    assert fechas == sorted(fechas)
+    assert "2026-10-16" in fechas and "2026-10-22" in fechas
     assert datos["data"][-1] == {"date": "2026-10-23", "close": 4937.2}
     assert datos["source"] == "dividendera:CFMITNIPSA"
-    assert len(datos["data"]) == 3
-    # El fixture de dividendera trae el 23-10: el catch-up agrega solo ese punto.
     assert (
         "[OK] CFMITNIPSA fecha=2026-10-23 close=4937.2 "
-        "fuente=dividendera:CFMITNIPSA nuevos=1" in out
+        f"fuente=dividendera:CFMITNIPSA nuevos={len(datos['data']) - 2}" in out
     )
-    assert "[AVISO]" not in out
+    assert "respaldo" not in out
     # No se consultó el respaldo: una sola petición, a la URL del nemo.
     assert fuentes["llamadas_a"] == 0
     assert fuentes["urls_d"] == ["https://www.dividendera.cl/CFMITNIPSA"]

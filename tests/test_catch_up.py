@@ -386,12 +386,17 @@ def test_store_merge_agrega_todos_los_puntos_posteriores():
 
     resultado = store.merge(feed, nuevos, FUND_B)
 
-    # Append-only: el 16-10 quedó antes del último publicado (20-10) y no se
-    # reescribe la historia; el catch-up agrega solo lo posterior.
+    # Catch-up: entra toda fecha desconocida dentro del rango ya cubierto (el
+    # 16-10, hueco entre 15-10 y 19-10) y toda fecha posterior al último punto
+    # (el 21-10). La frontera publicada no se reescribe.
     assert resultado.estado == "agregado"
-    assert [punto.date.isoformat() for punto in resultado.agregados] == ["2026-10-21"]
+    assert [punto.date.isoformat() for punto in resultado.agregados] == [
+        "2026-10-16",
+        "2026-10-21",
+    ]
     assert [punto.date.isoformat() for punto in resultado.feed.data] == [
         "2026-10-15",
+        "2026-10-16",
         "2026-10-19",
         "2026-10-20",
         "2026-10-21",

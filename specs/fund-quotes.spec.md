@@ -3,7 +3,7 @@ spec-id: fund-quotes
 id: fund-quotes
 title: Feed de cotizaciones diarias para dos fondos chilenos
 status: draft
-version: 1.1.0
+version: 1.2.0
 layer: data
 tags: [cotizaciones, fondos, chile, portfolio-performance, github-pages, append-only]
 acceptance: specs/fund-quotes.feature
@@ -60,9 +60,9 @@ hipótesis explícita antes de implementarse.
 
 | # | Fuente | URL | Selector de parseo | Formato numérico / fecha | Riesgo | Rol |
 |---|---|---|---|---|---|---|
-| A | LedgiFi (CFMITNIPSA) | `https://ledgifi.com/chile/fondos/fondo/9019` leída vía `https://r.jina.ai/<URL>`: **modo markdown** (sin `x-return-format`) y, si está bloqueado, **modo HTML** (`x-return-format: html`) — ver §4.1 | Fila de la tabla de series cuya primera celda nombra la serie `UNICA`/`ÚNICA`; columna `Valor cuota`, ubicada por encabezado. Fecha en la misma celda o en el texto de actualización (`"15 de octubre de 2026"`) | `$5.054,2279` → punto de miles, coma decimal, 4 decimales. Fecha en español, día-mes-año | HTTP directo responde **429 + "Vercel Security Checkpoint"** (challenge JS); el modo HTML del proxy a veces recibe esa misma página. Riesgo de cambio de layout, de rate limit del proxy o de caída del proxy | **Primaria de CFMITNIPSA.** Es el **valor cuota oficial (NAV)**, no el cierre bursátil |
-| B | Independencia (CFINRENTAS) | `https://www.aindependencia.cl/fondos/` (HTTP 200, HTML plano, ~334 KB) | JS inline `window.vfiChartData = {...}`; serie `"BOLSA"`; último par `[epoch_ms, precio]` | Precio flotante de 2 decimales. `epoch_ms` en **UTC** (ver §4.2) | **Serie congelada:** publica "Datos al cierre del día: 19/10/2026" desde el 2026-10-19. Rediseño del sitio o cambio de nombre/forma de la serie; la serie `"Valor Libro"` tiene otra escala y no debe usarse | **Respaldo de CFINRENTAS.** Si falta la serie `"BOLSA"`: el fondo falla ruidosamente, no se escribe punto |
-| C | Dividendera (CFINRENTAS primaria, CFMITNIPSA respaldo) | `https://www.dividendera.cl/<NEMO>` (HTTP 200 directo, sin proxy ni captcha, 500-650 KB) — ver §4.3 | App Next.js: objetos `{"nemo":…,"fecha":"$D<YYYY-MM-DD>T…","cierre":…}` en los chunks `self.__next_f.push([1,"…"])`, con comillas escapadas o no; se toma el de fecha máxima | Número JSON con punto decimal y 2-4 decimales. La fecha `$D` ya es el día bursátil en hora de Chile: se usa el `YYYY-MM-DD` literal | Cambio de nemo o de layout del payload; página de bloqueo (`Vercel Security Checkpoint`) o cuerpo menor a 100 KB | 2 reintentos con backoff (5 s, 15 s). Si el nemo no aparece: el fondo falla ruidosamente con motivo accionable |
+| A | LedgiFi (CFMITNIPSA) | `https://ledgifi.com/chile/fondos/fondo/9019` leída vía `https://r.jina.ai/<URL>`: **modo markdown** (sin `x-return-format`) y, si está bloqueado, **modo HTML** (`x-return-format: html`) — ver §4.1 | Fila de la tabla de series cuya primera celda nombra la serie `UNICA`/`ÚNICA`; columna `Valor cuota`, ubicada por encabezado. Fecha en la misma celda o en el texto de actualización (`"15 de octubre de 2026"`) | `$5.054,2279` → punto de miles, coma decimal, 4 decimales. Fecha en español, día-mes-año | HTTP directo responde **429 + "Vercel Security Checkpoint"** (challenge JS); el modo HTML del proxy a veces recibe esa misma página. Riesgo de cambio de layout, de rate limit del proxy o de caída del proxy | **Respaldo de CFMITNIPSA** (y única fuente de la serie de índice del backfill). Publica el **valor cuota oficial (NAV)**, no el cierre bursátil; entrega un solo punto por corrida |
+| B | Independencia (CFINRENTAS) | `https://www.aindependencia.cl/fondos/` (HTTP 200, HTML plano, ~334 KB) | JS inline `window.vfiChartData = {...}`; serie `"BOLSA"`; último par `[epoch_ms, precio]` | Precio flotante de 2 decimales. `epoch_ms` en **UTC** (ver §4.2) | **Serie congelada:** publica "Datos al cierre del día: 19/10/2026" desde el 2026-10-19. Rediseño del sitio o cambio de nombre/forma de la serie; la serie `"Valor Libro"` tiene otra escala y no debe usarse | **Respaldo de CFINRENTAS.** Si falta la serie `"BOLSA"`: el fondo falla ruidosamente, no se escribe punto. Entrega un solo punto por corrida |
+| C | Dividendera (primaria de ambos fondos) | `https://www.dividendera.cl/<NEMO>` (HTTP 200 directo, sin proxy ni captcha, 500-650 KB) — ver §4.3 | App Next.js: objetos `{"nemo":…,"fecha":"$D<YYYY-MM-DD>T…","cierre":…}` en los chunks `self.__next_f.push([1,"…"])`, con comillas escapadas o no; se devuelve **toda** la serie (2400+ cierres desde 2017), ascendente y sin duplicados | Número JSON con punto decimal y 2-4 decimales. La fecha `$D` ya es el día bursátil en hora de Chile: se usa el `YYYY-MM-DD` literal | Cambio de nemo o de layout del payload; página de bloqueo (`Vercel Security Checkpoint`) o cuerpo menor a 100 KB | 2 reintentos con backoff (5 s, 15 s). Si el nemo no aparece: el fondo falla ruidosamente con motivo accionable |
 
 **Cadena por fondo (orden de intento).** El CLI prueba la primaria; si lanza `FetchError` o
 `SourceError`, prueba la siguiente y reporta en la línea del fondo qué fuente se usó
@@ -72,14 +72,16 @@ fondo falla con **todos** los motivos.
 | Fondo | Cadena `fuente=` |
 |---|---|
 | `CFINRENTAS` | `dividendera:CFINRENTAS` → `aindependencia:bolsa` |
-| `CFMITNIPSA` | `ledgifi:9019` → `dividendera:CFMITNIPSA` |
+| `CFMITNIPSA` | `dividendera:CFMITNIPSA` → `ledgifi:9019` |
 
-**Por qué dividendera es primaria de CFINRENTAS y solo respaldo de CFMITNIPSA.** La serie
-`BOLSA` de aindependencia y los cierres de dividendera son **la misma serie de la Bolsa de
-Santiago** (validación cruzada en §4.3), pero aindependencia dejó de publicar el 2026-10-19.
-En cambio, para CFMITNIPSA LedgiFi publica el **valor cuota oficial (NAV)** y dividendera el
-**cierre bursátil**, que difieren ~0,15% (15-10: `5054,2279` vs `5046,8`): por eso en ese fondo
-la primaria sigue siendo LedgiFi.
+**Por qué dividendera es primaria de los dos fondos.** Dividendera publica el **cierre bursátil
+de la Bolsa de Santiago** con la **serie diaria completa** (2408 puntos en `CFINRENTAS` y 2418 en
+`CFMITNIPSA`, desde 2017 hasta el último cierre). La serie `BOLSA` de aindependencia es la misma
+serie, pero su sitio está congelado en el 2026-10-19; LedgiFi publica el **valor cuota oficial
+(NAV)** de `CFMITNIPSA`, que difiere ~0,15% del cierre bursátil (15-10: `5054,2279` vs `5046,8`).
+Con dividendera como primaria, ambos feeds quedan en la **misma convención** (cierre BCS) y con
+historia diaria real, lo que además habilita el catch-up y la siembra de §5.4. El ~0,15% frente al
+NAV es una diferencia de convención, no un error: el feed es una serie de precios de mercado.
 
 ### 4.1 Fuente A — LedgiFi (CFMITNIPSA, RUN 9019-0)
 
@@ -155,7 +157,9 @@ Reglas normativas:
    `FI Independencia Rentas Inmobiliarias`.
 3. `source` identifica la fuente realmente usada: `ledgifi:9019` o `aindependencia:bolsa`.
 4. `updated` es la **fecha del último punto**, no la fecha de ejecución.
-5. `data` ordenado ascendente por `date`, sin fechas duplicadas, sin huecos rellenados.
+5. `data` ordenado ascendente por `date`, sin fechas duplicadas, sin huecos rellenados y
+   **append-only**: una corrida solo puede agregar puntos con fecha posterior al último ya
+   publicado; nunca reordena, reescribe ni interpola lo existente.
 6. `close` es numérico (no string), con hasta 4 decimales, redondeo half-up.
 7. `date` en ISO `YYYY-MM-DD`, sin hora ni zona.
 8. Serialización determinista: UTF-8, `indent=2`, newline final, orden de claves fijo
@@ -163,6 +167,31 @@ Reglas normativas:
    producen archivos **idénticos byte a byte** (hash SHA-256 igual).
 9. Escritura atómica: archivo temporal en el mismo directorio + `os.replace`.
 10. `currency` es siempre `CLP` para ambos fondos (no se lee de la fuente).
+
+### 5.1.1 Catch-up multi-punto
+
+Los adaptadores devuelven `list[Quote]` **ascendente por fecha** con todos los puntos que la
+fuente traiga: dividendera entrega su serie completa (2400+ cierres) y LedgiFi e Independencia, que
+solo publican el último valor, devuelven una lista de largo 1. El adaptador **no recorta**: el
+recorte lo decide el store.
+
+`store.merge(feed, nuevos)` agrega **todos** los puntos con `fecha > última fecha publicada` e
+ignora los duplicados y los anteriores (quedan registrados como descartados). El resultado es
+ascendente, sin fechas duplicadas y append-only; el orden del payload de la fuente es irrelevante
+porque cada punto se clasifica por fecha.
+
+Estados de la fusión:
+
+| Estado | Cuándo | Efecto |
+|---|---|---|
+| `nuevo` | No existía feed | Se crea con los puntos recibidos |
+| `agregado` | Entró al menos un punto | Se reescribe el feed con el tramo nuevo al final |
+| `sin_cambios` | Todo lo recibido ya estaba publicado | El archivo no se toca |
+| `conflicto` | Un punto del mismo día con otro valor | Se conserva el guardado (EC-001) |
+| `antiguo` | Todas las fechas son anteriores al último punto | No-op informativo (EC-003) |
+
+Los estados `conflicto` y `antiguo` describen el caso de un único punto sin novedad; con una serie
+larga, el tramo nuevo se agrega y los puntos viejos simplemente se descartan.
 
 ### 5.2 Archivo de backfill derivado: `docs/quotes/<TICKER>.backfill.json`
 
@@ -181,6 +210,11 @@ idénticos. Un `N` fuera de rango es error de configuración, código `1`.
 Si `N` excede la cantidad de puntos de índice estrictamente anteriores a la fecha del último punto
 oficial, es error de configuración, código `1` (no se recorta a los disponibles).
 
+El índice solo lo publica LedgiFi. Con dividendera como primaria, el CLI busca el índice en el resto
+de la cadena sin cambiar la fuente de la cuota; si el índice no cubre la fecha del último punto
+oficial (LedgiFi viene atrasado), el backfill se degrada al aviso no bloqueante de siempre y el
+feed oficial se publica igual.
+
 ### 5.3 Consumo en Portfolio Performance
 
 Proveedor **JSON** (nativo, sin plugins), por instrumento:
@@ -191,6 +225,29 @@ Proveedor **JSON** (nativo, sin plugins), por instrumento:
 
 El README debe además indicar que el sitio se publica desde la rama `main`, carpeta `/docs`, y cómo
 verificar que la actualización ocurrió (ver `AC-09`).
+
+### 5.4 Siembra de historia inicial: `--sembrar-historia N`
+
+Con `--sembrar-historia N` (`1 ≤ N ≤ 800`, entero; por defecto apagado), si el feed **no existe** se
+crea escribiendo los **últimos N días hábiles** (L-V) de la serie de la fuente, ascendentes y sin
+duplicados, con `updated` igual al último punto sembrado y `source` igual a la fuente que respondió.
+
+Reglas:
+
+1. Los puntos sembrados **no pasan por la guarda de anomalía** (§6 REQ-GRD-002): son cierres
+   oficiales ya publicados por la fuente, no un punto nuevo a validar.
+2. Sí pasan por la normalización numérica de `REQ-ADP-003` y por el chequeo de fecha futura
+   (EC-002): los puntos con fecha posterior a hoy + 1 se descartan.
+3. Si el feed **ya existe**, `--sembrar-historia` es **no-op**: se emite
+   `[AVISO] <TICKER> --sembrar-historia no se aplica: el feed ya existe con <n> puntos` y la corrida
+   sigue su curso normal (catch-up del día). La siembra nunca reescribe un feed existente.
+4. Si la fuente trae menos días hábiles que `N`, se siembra todo lo disponible y se agrega un
+   `[AVISO]` indicando cuántos se sembraron y cuántos se pidieron.
+5. `N` fuera de rango es error de configuración, código `1`, sin tocar archivos.
+6. El feed sembrado es determinista byte a byte (§5.1 regla 8) y se escribe de forma atómica.
+
+Sin el flag, un feed inexistente se crea con **el último punto** de la serie (EC-004), que es el
+comportamiento histórico del pipeline: la siembra de historia es siempre una decisión explícita.
 
 ## 6. Requisitos
 
@@ -492,6 +549,25 @@ Los criterios son normativos; `specs/fund-quotes.feature` es su versión ejecuta
 - Entonces el hash SHA-256 de `docs/quotes/*.json` y de `docs/index.html` es idéntico antes y después
 - Y el proceso termina con código `0`
 
+**AC-15 — Catch-up: todo punto desconocido dentro del rango publicado entra**
+- Dado un feed de `CFINRENTAS` con los puntos 2026-10-15, 2026-10-19 y 2026-10-22
+- Y una fuente que entrega esos mismos puntos más 2026-10-16, 2026-10-20 y 2026-10-21
+- Cuando el pipeline corre
+- Entonces el feed queda con 6 puntos, ascendentes y sin fechas duplicadas
+- Y los tres puntos nuevos se agregan sin alterar el valor de los ya publicados
+- Y se emite `[AVISO] <TICKER> se rellenaron 3 día(s) faltantes dentro del rango ya publicado (catch-up)`
+- Y los puntos rellenados no pasan por la guarda de anomalía, solo por la normalización numérica
+
+**AC-16 — Siembra de historia inicial**
+- Dado que `docs/quotes/<TICKER>.json` no existe
+- Y la fuente entrega la serie diaria completa
+- Cuando el pipeline corre con `--sembrar-historia 120`
+- Entonces el feed se crea con los 120 días hábiles más recientes de la fuente
+- Y el archivo queda determinista (claves en orden, `indent=2`, sin BOM, `\n` final)
+- Y se emite `[AVISO] <TICKER> siembra de historia: 120 días hábiles desde <fecha> hasta <fecha>`
+- Y si el feed ya existe, la siembra es no-op con `[AVISO]` y el feed no se toca
+- Y `N` fuera del rango `1 ≤ N ≤ 800` termina con código `1`
+
 Trazabilidad con los criterios de referencia del encargo:
 
 | AC | Criterio de referencia | Requisitos |
@@ -514,6 +590,8 @@ Trazabilidad con los criterios de referencia del encargo:
 | EC-002 | §8 (fecha implausible) | REQ-GRD-001 |
 | AC-13 | §5.1 reglas 7-8 (serialización determinista) | REQ-STO-004 |
 | AC-14 | §7 (`--dry-run`) | REQ-CLI-001, REQ-PUB-001 |
+| AC-15 | §5.1.1 (catch-up multi-punto) | REQ-STO-001, REQ-ADP-001, REQ-CLI-001 |
+| AC-16 | §5.4 (siembra de historia) | REQ-STO-001, REQ-STO-004, REQ-CLI-001 |
 | Unit tests de `fetch.py` | §9 (allowlist y redirecciones) | REQ-SEC-003 |
 
 El archivo `.feature` incluye, además, dos escenarios marcados `@borde` (mismo día con otro valor

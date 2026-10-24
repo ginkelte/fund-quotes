@@ -13,6 +13,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -169,8 +170,8 @@ def _seleccion(valores: list[list[str]] | None) -> list[Fund]:
     return vistos
 
 
-def _close_txt(valor: float) -> str:
-    return f"{valor:.4f}".rstrip("0").rstrip(".")
+def _close_txt(valor: float | Decimal) -> str:
+    return f"{float(valor):.4f}".rstrip("0").rstrip(".")
 
 
 def _linea_ok(fund: Fund, quote: Quote, fuente: str, nuevos: int) -> str:
@@ -373,7 +374,18 @@ def _procesar_fondo(
 
     base = existente.data if existente is not None else []
     fusion_completa = store.merge(existente, validos, fund, source=fuente)
-    tramo_nuevo = fusion_completa.feed.data[len(base):]
+    frontera = base[-1].date if base else None
+    nuevos = fusion_completa.agregados
+    # El tramo nuevo (posterior a la frontera) pasa por la guarda de anomalía.
+    # Los huecos rellenados dentro del rango ya publicado son historia oficial
+    # de la fuente y entran sin guarda, con aviso.
+    tramo_nuevo = [punto for punto in nuevos if frontera is None or punto.date > frontera]
+    relleno = [punto for punto in nuevos if frontera is not None and punto.date <= frontera]
+    if relleno:
+        lineas.append(
+            f"[AVISO] {fund.ticker} se rellenaron {len(relleno)} día(s) faltantes dentro "
+            f"del rango ya publicado (catch-up)"
+        )
 
     previo = existente.last if existente is not None else None
     aceptados: list[Quote] = []
@@ -393,8 +405,11 @@ def _procesar_fondo(
         aceptados.append(punto)
         previo = punto
 
-    fusion = fusion_completa if aceptados == tramo_nuevo else store.merge(
-        existente, aceptados, fund, source=fuente
+    lote = sorted(relleno + aceptados, key=lambda punto: punto.date)
+    fusion = (
+        fusion_completa
+        if len(lote) == len(nuevos)
+        else store.merge(existente, lote, fund, source=fuente)
     )
     resultado = Resultado(fund=fund, estado=Estado.SIN_CAMBIOS, feed=None, lineas=lineas)
     estado_merge = fusion.estado
@@ -422,20 +437,20 @@ def _procesar_fondo(
         )
     elif estado_merge == "conflicto":
         guardado = ultimo
+        publicado = ultimo
         if existente is not None:
-            for punto in existente.data:
-                if punto.date == ultimo.date:
-                    guardado = punto
-                    break
+            conflicto = store.primer_conflicto(existente, aceptados)
+            if conflicto is not None:
+                guardado, publicado = conflicto
         resultado.estado = Estado.CONFLICTO
         resultado.quote = guardado
         resultado.lineas.append(
             _linea_sin_cambios(fund, guardado, fuente, "ya_existia_con_otro_valor")
         )
         resultado.lineas.append(
-            f"[AVISO] {fund.ticker} el punto {ultimo.date.isoformat()} ya existía con "
+            f"[AVISO] {fund.ticker} el punto {guardado.date.isoformat()} ya existía con "
             f"otro valor: se conserva {_close_txt(guardado.close)} "
-            f"(la fuente publicó {_close_txt(ultimo.close)})"
+            f"(la fuente publicó {_close_txt(publicado.close)})"
         )
     elif estado_merge == "antiguo":
         resultado.estado = Estado.ANTIGUO
@@ -448,11 +463,14 @@ def _procesar_fondo(
         resultado.quote = ultimo
         resultado.lineas.append(_linea_sin_cambios(fund, ultimo, fuente, "ya_publicado"))
         if fusion.descartados:
-            fechas = ", ".join(p.date.isoformat() for p in fusion.descartados[-3:])
-            lineas.append(
-                f"[AVISO] {fund.ticker} {len(fusion.descartados)} punto(s) ya publicados "
-                f"sin cambios (últimos: {fechas})"
-            )
+            ya_estaban = sum(1 for p in fusion.descartados if existente and any(
+                q.date == p.date for q in existente.data))
+            fuera = len(fusion.descartados) - ya_estaban
+            if ya_estaban:
+                lineas.append(
+                    f"[AVISO] {fund.ticker} {ya_estaban} punto(s) de la fuente ya estaban "
+                    f"publicados sin cambios; {fuera} quedaron fuera del rango del feed"
+                )
 
     return resultado, _backfill_de(resultado, existente, indice, args)
 
