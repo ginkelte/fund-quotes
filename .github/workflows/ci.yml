@@ -1,0 +1,44 @@
+name: CI
+
+# Gate de calidad para cambios al pipeline: lint + tests en cada PR.
+# El workflow diario (daily.yml) publica el feed; este solo valida código.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-y-tests:
+    name: Lint y tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Instalar herramientas de desarrollo
+        run: |
+          python -m pip install --upgrade pip
+          pip install "pytest>=7,<9" "ruff==0.17.1"
+          ruff --version
+
+      - name: Revisar estilo con ruff
+        run: ruff check .
+
+      - name: Correr la suite de tests
+        run: python -m pytest
