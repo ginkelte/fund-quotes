@@ -20,6 +20,9 @@ ALLOWED_HOSTS = frozenset(
         # El sitio del administrador se sirve con www; se declara explícito en
         # lugar de aceptar cualquier subdominio.
         "www.aindependencia.cl",
+        # Dividendera sirve la ficha de cada nemo con HTTP 200 directo.
+        "dividendera.cl",
+        "www.dividendera.cl",
     }
 )
 

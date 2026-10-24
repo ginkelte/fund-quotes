@@ -19,10 +19,19 @@ from .backfill import BACKFILL_MAX, BACKFILL_MIN, BackfillError, construir_backf
 from .catalog import Fund
 from .fetch import FetchError
 from .quote import Quote
-from .sources import SourceError, aindependencia, ledgifi
+from .sources import SourceError, aindependencia, dividendera, ledgifi
+from .sources.ledgifi import IndexPoint
 
 ZONA = ZoneInfo("America/Santiago")
-ADAPTADORES = {"ledgifi": ledgifi, "aindependencia": aindependencia}
+
+# Cada entrada recibe la referencia del catálogo (``<adaptador>:<argumento>``) y si
+# hace falta la serie de índice. Los adaptadores de una sola URL ignoran el
+# argumento; dividendera lo usa como nemo.
+ADAPTADORES = {
+    "ledgifi": lambda _ref, con_indice: ledgifi.cargar(con_indice=con_indice),
+    "aindependencia": lambda _ref, con_indice: aindependencia.cargar(con_indice=con_indice),
+    "dividendera": lambda ref, con_indice: dividendera.cargar(ref, con_indice=con_indice),
+}
 
 # Raíz bajo la cual deben quedar todas las rutas de escritura (§9). Se detecta
 # desde el paquete (``<repo>/fund_quotes/cli.py``) y los tests la reemplazan.
@@ -145,17 +154,17 @@ def _close_txt(valor: float) -> str:
     return f"{valor:.4f}".rstrip("0").rstrip(".")
 
 
-def _linea_ok(fund: Fund, quote: Quote) -> str:
+def _linea_ok(fund: Fund, quote: Quote, fuente: str) -> str:
     return (
         f"[OK] {fund.ticker} fecha={quote.date.isoformat()} "
-        f"close={_close_txt(quote.close)} fuente={fund.source}"
+        f"close={_close_txt(quote.close)} fuente={fuente}"
     )
 
 
-def _linea_sin_cambios(fund: Fund, quote: Quote, motivo: str) -> str:
+def _linea_sin_cambios(fund: Fund, quote: Quote, fuente: str, motivo: str) -> str:
     return (
         f"[SIN CAMBIOS] {fund.ticker} fecha={quote.date.isoformat()} "
-        f"close={_close_txt(quote.close)} fuente={fund.source} motivo={motivo}"
+        f"close={_close_txt(quote.close)} fuente={fuente} motivo={motivo}"
     )
 
 
@@ -165,6 +174,58 @@ def _linea_anomalia(fund: Fund, exc: guards.AnomaliaDetectada) -> str:
         f"variacion={guards.formato_pct(exc.variacion, signo=True)} "
         f"umbral={guards.formato_pct(exc.umbral)} fecha={exc.fecha.isoformat()}"
     )
+
+
+class _FalloFuentes(Exception):
+    """Todas las fuentes de la cadena del fondo fallaron."""
+
+    def __init__(self, motivo: str) -> None:
+        super().__init__(motivo)
+        self.motivo = motivo
+
+
+def _cargar_fuente(
+    referencia: str, con_indice: bool
+) -> tuple[Quote, list[IndexPoint] | None]:
+    """Ejecuta el adaptador de una referencia ``<adaptador>:<argumento>``."""
+
+    adaptador, _, argumento = referencia.partition(":")
+    cargador = ADAPTADORES.get(adaptador)
+    if cargador is None:
+        raise SourceError(f"fuente desconocida en el catálogo: {referencia!r}")
+    return cargador(argumento, con_indice)
+
+
+def _adquirir(
+    fund: Fund, con_indice: bool
+) -> tuple[Quote, list[IndexPoint] | None, str, list[str]]:
+    """Recorre la cadena de fuentes del fondo: primaria y, si falla, respaldos.
+
+    Devuelve ``(quote, indice, fuente_usada, avisos)``. Si la fuente que responde
+    no es la primaria, se agrega un ``[AVISO]`` con el motivo del fallo primario.
+    Si falla toda la cadena, lanza ``_FalloFuentes`` nombrando cada intento.
+    """
+
+    motivos: list[str] = []
+    for posicion, referencia in enumerate(fund.sources):
+        try:
+            quote, indice = _cargar_fuente(referencia, con_indice)
+        except (FetchError, SourceError) as exc:
+            motivo = exc.motivo if isinstance(exc, FetchError) else str(exc)
+            etiqueta = "primaria" if posicion == 0 else "respaldo"
+            motivos.append(f"{etiqueta} {referencia}: {motivo}")
+            continue
+        avisos: list[str] = []
+        if posicion > 0:
+            avisos.append(
+                f"[AVISO] {fund.ticker} se usó la fuente de respaldo {referencia}: "
+                f"la primaria {fund.source} falló ({motivos[0]})"
+            )
+        return quote, indice, referencia, avisos
+
+    if len(motivos) == 1:
+        raise _FalloFuentes(motivos[0])
+    raise _FalloFuentes("; ".join(motivos))
 
 
 def _procesar_fondo(
@@ -177,24 +238,14 @@ def _procesar_fondo(
 
     necesita_indice = args.backfill is not None and fund.supports_backfill
     try:
-        quote, indice = ADAPTADORES[fund.adapter].cargar(con_indice=necesita_indice)
-    except FetchError as exc:
+        quote, indice, fuente, avisos = _adquirir(fund, necesita_indice)
+    except _FalloFuentes as exc:
         return (
             Resultado(
                 fund=fund,
                 estado=Estado.FALLA,
                 feed=existente,
                 lineas=[f"[FALLA] {fund.ticker} fuente={fund.source} motivo={exc.motivo}"],
-            ),
-            None,
-        )
-    except SourceError as exc:
-        return (
-            Resultado(
-                fund=fund,
-                estado=Estado.FALLA,
-                feed=existente,
-                lineas=[f"[FALLA] {fund.ticker} fuente={fund.source} motivo={exc}"],
             ),
             None,
         )
@@ -209,7 +260,8 @@ def _procesar_fondo(
                 estado=Estado.ANOMALIA,
                 feed=existente,
                 quote=quote,
-                lineas=[
+                lineas=avisos
+                + [
                     (
                         f"[ANOMALIA] {fund.ticker} fecha={quote.date.isoformat()} "
                         f"close={_close_txt(quote.close)} motivo=fecha implausible "
@@ -220,9 +272,9 @@ def _procesar_fondo(
             None,
         )
 
-    fusionado, estado_merge = store.merge(existente, quote, fund)
+    fusionado, estado_merge = store.merge(existente, quote, fund, source=fuente)
     resultado = Resultado(
-        fund=fund, estado=Estado.SIN_CAMBIOS, feed=existente, quote=quote
+        fund=fund, estado=Estado.SIN_CAMBIOS, feed=existente, quote=quote, lineas=list(avisos)
     )
 
     if estado_merge == "agregado":
@@ -242,7 +294,7 @@ def _procesar_fondo(
             )
         resultado.estado = Estado.OK
         resultado.feed = fusionado
-        resultado.lineas.append(_linea_ok(fund, quote))
+        resultado.lineas.append(_linea_ok(fund, quote, fuente))
         if forzado:
             resultado.lineas.append(
                 f"[OK] {fund.ticker} punto aceptado por --force-anomaly "
@@ -251,7 +303,7 @@ def _procesar_fondo(
     elif estado_merge == "nuevo":
         resultado.estado = Estado.OK
         resultado.feed = fusionado
-        resultado.lineas.append(_linea_ok(fund, quote))
+        resultado.lineas.append(_linea_ok(fund, quote, fuente))
     elif estado_merge == "conflicto":
         guardado = existente.data[-1] if existente else quote
         for punto in existente.data if existente else []:
@@ -260,7 +312,7 @@ def _procesar_fondo(
                 break
         resultado.estado = Estado.CONFLICTO
         resultado.lineas.append(
-            _linea_sin_cambios(fund, guardado, "ya_existia_con_otro_valor")
+            _linea_sin_cambios(fund, guardado, fuente, "ya_existia_con_otro_valor")
         )
         resultado.lineas.append(
             f"[AVISO] {fund.ticker} el punto {quote.date.isoformat()} ya existía con "
@@ -270,11 +322,11 @@ def _procesar_fondo(
     elif estado_merge == "antiguo":
         resultado.estado = Estado.ANTIGUO
         resultado.lineas.append(
-            _linea_sin_cambios(fund, quote, "fecha_anterior_al_ultimo_punto")
+            _linea_sin_cambios(fund, quote, fuente, "fecha_anterior_al_ultimo_punto")
         )
     else:
         resultado.estado = Estado.SIN_CAMBIOS
-        resultado.lineas.append(_linea_sin_cambios(fund, quote, "ya_publicado"))
+        resultado.lineas.append(_linea_sin_cambios(fund, quote, fuente, "ya_publicado"))
 
     if necesita_indice:
         base = resultado.feed if resultado.estado is Estado.OK else existente

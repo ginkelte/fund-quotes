@@ -42,6 +42,15 @@ def formato_clp(valor: float) -> str:
     return f"{entero},{decimales}"
 
 
+def _fuentes(fund: Fund, efectiva: str) -> str:
+    """Fuente efectiva y, si el fondo tiene cadena, las de respaldo configuradas."""
+
+    respaldos = [fuente for fuente in fund.sources if fuente != efectiva]
+    if not respaldos:
+        return html.escape(efectiva)
+    return f"{html.escape(efectiva)} (respaldo: {html.escape(', '.join(respaldos))})"
+
+
 def _fila(fund: Fund, feed: Feed | None, hoy: date) -> str:
     if feed is None or feed.last is None:
         estado = "Alerta: sin datos publicados"
@@ -51,7 +60,7 @@ def _fila(fund: Fund, feed: Feed | None, hoy: date) -> str:
             f"        <td><code>{html.escape(fund.ticker)}</code></td>\n"
             f"        <td>—</td>\n"
             f"        <td>—</td>\n"
-            f"        <td>{html.escape(fund.source)}</td>\n"
+            f"        <td>{_fuentes(fund, fund.source)}</td>\n"
             f"        <td>—</td>\n"
             f"        <td>{html.escape(estado)}</td>\n"
             f"      </tr>"
@@ -72,7 +81,7 @@ def _fila(fund: Fund, feed: Feed | None, hoy: date) -> str:
         f"        <td><code>{html.escape(feed.ticker)}</code></td>\n"
         f"        <td class=\"num\">{html.escape(formato_clp(ultimo.close))}</td>\n"
         f"        <td>{ultimo.date.isoformat()}</td>\n"
-        f"        <td>{html.escape(feed.source)}</td>\n"
+        f"        <td>{_fuentes(fund, feed.source)}</td>\n"
         f"        <td class=\"num\">{dias}</td>\n"
         f"        <td>{html.escape(estado)}</td>\n"
         f"      </tr>"

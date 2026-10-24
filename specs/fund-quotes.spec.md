@@ -55,13 +55,31 @@ fuente, y el feed conserva toda la historia previa sin duplicados ni puntos inve
 
 ## 4. Fuentes de datos
 
-Solo se usan las dos fuentes verificadas. Cualquier URL nueva debe entrar a este documento como
+Solo se usan las fuentes verificadas de este documento. Cualquier URL nueva debe entrar acá como
 hipótesis explícita antes de implementarse.
 
-| # | Fondo | URL | Selector de parseo | Formato numérico / fecha | Riesgo | Fallback |
+| # | Fuente | URL | Selector de parseo | Formato numérico / fecha | Riesgo | Rol |
 |---|---|---|---|---|---|---|
-| A | CFMITNIPSA | `https://ledgifi.com/chile/fondos/fondo/9019` leída vía `https://r.jina.ai/<URL>`: **modo markdown** (sin `x-return-format`) y, si está bloqueado, **modo HTML** (`x-return-format: html`) — ver §4.1 | Fila de la tabla de series cuya primera celda nombra la serie `UNICA`/`ÚNICA`; columna `Valor cuota`, ubicada por encabezado. Fecha en la misma celda o en el texto de actualización (`"15 de octubre de 2026"`) | `$5.054,2279` → punto de miles, coma decimal, 4 decimales. Fecha en español, día-mes-año | HTTP directo responde **429 + "Vercel Security Checkpoint"** (challenge JS); el modo HTML del proxy a veces recibe esa misma página. Riesgo de cambio de layout, de rate limit del proxy o de caída del proxy | 2 reintentos con backoff (5 s, 15 s) por modo. Si ambos modos fallan: el fondo falla ruidosamente con el motivo de cada modo, no se escribe punto. Sin fuente oficial alternativa verificada |
-| B | CFINRENTAS | `https://www.aindependencia.cl/fondos/` (HTTP 200, HTML plano, ~334 KB) | JS inline `window.vfiChartData = {...}`; serie `"BOLSA"`; último par `[epoch_ms, precio]` | Precio flotante de 2 decimales. `epoch_ms` en **UTC** (ver §4.2) | Rediseño del sitio o cambio de nombre/forma de la serie; la serie `"Valor Libro"` tiene otra escala y no debe usarse | 2 reintentos con backoff. Si falta la serie `"BOLSA"`: el fondo falla ruidosamente, no se escribe punto |
+| A | LedgiFi (CFMITNIPSA) | `https://ledgifi.com/chile/fondos/fondo/9019` leída vía `https://r.jina.ai/<URL>`: **modo markdown** (sin `x-return-format`) y, si está bloqueado, **modo HTML** (`x-return-format: html`) — ver §4.1 | Fila de la tabla de series cuya primera celda nombra la serie `UNICA`/`ÚNICA`; columna `Valor cuota`, ubicada por encabezado. Fecha en la misma celda o en el texto de actualización (`"15 de octubre de 2026"`) | `$5.054,2279` → punto de miles, coma decimal, 4 decimales. Fecha en español, día-mes-año | HTTP directo responde **429 + "Vercel Security Checkpoint"** (challenge JS); el modo HTML del proxy a veces recibe esa misma página. Riesgo de cambio de layout, de rate limit del proxy o de caída del proxy | **Primaria de CFMITNIPSA.** Es el **valor cuota oficial (NAV)**, no el cierre bursátil |
+| B | Independencia (CFINRENTAS) | `https://www.aindependencia.cl/fondos/` (HTTP 200, HTML plano, ~334 KB) | JS inline `window.vfiChartData = {...}`; serie `"BOLSA"`; último par `[epoch_ms, precio]` | Precio flotante de 2 decimales. `epoch_ms` en **UTC** (ver §4.2) | **Serie congelada:** publica "Datos al cierre del día: 19/10/2026" desde el 2026-10-19. Rediseño del sitio o cambio de nombre/forma de la serie; la serie `"Valor Libro"` tiene otra escala y no debe usarse | **Respaldo de CFINRENTAS.** Si falta la serie `"BOLSA"`: el fondo falla ruidosamente, no se escribe punto |
+| C | Dividendera (CFINRENTAS primaria, CFMITNIPSA respaldo) | `https://www.dividendera.cl/<NEMO>` (HTTP 200 directo, sin proxy ni captcha, 500-650 KB) — ver §4.3 | App Next.js: objetos `{"nemo":…,"fecha":"$D<YYYY-MM-DD>T…","cierre":…}` en los chunks `self.__next_f.push([1,"…"])`, con comillas escapadas o no; se toma el de fecha máxima | Número JSON con punto decimal y 2-4 decimales. La fecha `$D` ya es el día bursátil en hora de Chile: se usa el `YYYY-MM-DD` literal | Cambio de nemo o de layout del payload; página de bloqueo (`Vercel Security Checkpoint`) o cuerpo menor a 100 KB | 2 reintentos con backoff (5 s, 15 s). Si el nemo no aparece: el fondo falla ruidosamente con motivo accionable |
+
+**Cadena por fondo (orden de intento).** El CLI prueba la primaria; si lanza `FetchError` o
+`SourceError`, prueba la siguiente y reporta en la línea del fondo qué fuente se usó
+(`fuente=`) más un `[AVISO]` con el motivo del fallo primario. Si falla toda la cadena, el
+fondo falla con **todos** los motivos.
+
+| Fondo | Cadena `fuente=` |
+|---|---|
+| `CFINRENTAS` | `dividendera:CFINRENTAS` → `aindependencia:bolsa` |
+| `CFMITNIPSA` | `ledgifi:9019` → `dividendera:CFMITNIPSA` |
+
+**Por qué dividendera es primaria de CFINRENTAS y solo respaldo de CFMITNIPSA.** La serie
+`BOLSA` de aindependencia y los cierres de dividendera son **la misma serie de la Bolsa de
+Santiago** (validación cruzada en §4.3), pero aindependencia dejó de publicar el 2026-10-19.
+En cambio, para CFMITNIPSA LedgiFi publica el **valor cuota oficial (NAV)** y dividendera el
+**cierre bursátil**, que difieren ~0,15% (15-10: `5054,2279` vs `5046,8`): por eso en ese fondo
+la primaria sigue siendo LedgiFi.
 
 ### 4.1 Fuente A — LedgiFi (CFMITNIPSA, RUN 9019-0)
 

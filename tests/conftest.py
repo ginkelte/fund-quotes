@@ -31,6 +31,20 @@ def md_ledgifi() -> str:
     return (FIXTURES / "ledgifi_9019.md").read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="session")
+def html_dividendera_cfinrentas() -> str:
+    """Recorte verbatim de https://www.dividendera.cl/CFINRENTAS (2026-10-22)."""
+
+    return (FIXTURES / "dividendera_CFINRENTAS.html").read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="session")
+def html_dividendera_cfmitnipsa() -> str:
+    """Recorte verbatim de https://www.dividendera.cl/CFMITNIPSA (2026-10-23)."""
+
+    return (FIXTURES / "dividendera_CFMITNIPSA.html").read_text(encoding="utf-8")
+
+
 @pytest.fixture(autouse=True)
 def raiz_repo_temporal(tmp_path, monkeypatch):
     """Autoriza ``tmp_path`` como raíz del repo: los tests escriben ahí (§9)."""
@@ -43,17 +57,30 @@ def raiz_repo_temporal(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fuentes(monkeypatch, html_ledgifi, html_independencia):
-    """Reemplaza la descarga real por los fixtures guardados."""
+    """Reemplaza la descarga real por los fixtures guardados.
 
-    from fund_quotes.sources import aindependencia, ledgifi
+    ``d`` es dividendera, la primaria de CFINRENTAS: por defecto **falla** para que
+    las pruebas anteriores a su incorporación sigan ejercitando el camino de
+    respaldo (aindependencia). Las pruebas que quieren la primaria hacen
+    ``fuentes["error_d"] = None`` y ``fuentes["d"] = <fixture>``.
+    """
+
+    from fund_quotes.fetch import FetchError
+    from fund_quotes.sources import aindependencia, dividendera, ledgifi
 
     estado = {
         "a": html_ledgifi,
         "b": html_independencia,
+        "d": None,
         "error_a": None,
         "error_b": None,
+        "error_d": FetchError(
+            "dividendera: fuente no habilitada en esta prueba (se usa el respaldo)"
+        ),
         "llamadas_a": 0,
         "llamadas_b": 0,
+        "llamadas_d": 0,
+        "urls_d": [],
     }
 
     def falso_a(*args, **kwargs):
@@ -68,8 +95,17 @@ def fuentes(monkeypatch, html_ledgifi, html_independencia):
             raise estado["error_b"]
         return estado["b"]
 
+    def falso_d(url, *args, **kwargs):
+        estado["llamadas_d"] += 1
+        estado["urls_d"].append(url)
+        if estado["error_d"] is not None:
+            raise estado["error_d"]
+        assert estado["d"] is not None, "falta el fixture de dividendera"
+        return estado["d"]
+
     monkeypatch.setattr(ledgifi, "fetch_text", falso_a)
     monkeypatch.setattr(aindependencia, "fetch_text", falso_b)
+    monkeypatch.setattr(dividendera, "fetch_text", falso_d)
     return estado
 
 
