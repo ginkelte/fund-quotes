@@ -8,10 +8,22 @@ sin dependencias pagas.
 
 Dos archivos JSON con la serie de cuotas de cada fondo:
 
-| Fondo | Ticker | RUN | Fuente |
-|---|---|---|---|
-| FM IT NOW S&P IPSA (Itaú AGF) | `CFMITNIPSA` | 9019-0 | LedgiFi (`ledgifi.com/chile/fondos/fondo/9019`) |
-| FI Independencia Rentas Inmobiliarias | `CFINRENTAS` | 7014-9 | Administradora Independencia (`aindependencia.cl/fondos/`) |
+| Fondo | Ticker | RUN | Fuente primaria | Respaldo |
+|---|---|---|---|---|
+| FM IT NOW S&P IPSA (Itaú AGF) | `CFMITNIPSA` | 9019-0 | `dividendera.cl` (cierre bursátil BCS) | LedgiFi (`ledgifi.com/chile/fondos/fondo/9019`, valor cuota oficial) |
+| FI Independencia Rentas Inmobiliarias | `CFINRENTAS` | 7014-9 | `dividendera.cl` (cierre bursátil BCS) | Administradora Independencia (`aindependencia.cl/fondos/`, serie BOLSA) |
+
+> **Nota sobre la base de precio.** El feed usa el **cierre bursátil** de la Bolsa de Santiago, que es
+> exactamente la serie que Portfolio Performance ya tenía vía Yahoo. El *valor cuota* oficial que publica
+> LedgiFi puede diferir en ~0,15%; se mantiene como respaldo y fuente de contraste, no como primaria.
+
+> **Cadenas de fuente.** Cada fondo define una fuente **primaria** y una de **respaldo**. Si la primaria
+> falla o cambia de layout, el pipeline usa la de respaldo, publica igual y deja `[AVISO]` indicando qué
+> fuente se usó. Solo si **ambas** fallan se reporta `[FALLA]`.
+
+> **Catch-up automático.** Cada corrida agrega **todos** los puntos que falten: los posteriores al último
+> publicado y también los huecos dentro del rango ya cubierto (por ejemplo, días en que el cron no corrió
+> o la fuente estuvo caída). Los puntos ya publicados nunca se reescriben.
 
 - Feed: `https://ginkelte.github.io/fund-quotes/quotes/CFMITNIPSA.json` y
   `https://ginkelte.github.io/fund-quotes/quotes/CFINRENTAS.json`
@@ -73,6 +85,7 @@ Flags disponibles:
 | `--fondo TICKER [TICKER ...]` | Limita la corrida a uno o más fondos del catálogo (por defecto, ambos) |
 | `--dry-run` | Calcula, valida y reporta sin escribir ningún archivo |
 | `--backfill N` | Genera N puntos **semimensuales** derivados del índice en `<TICKER>.backfill.json` (solo `CFMITNIPSA`; `1 ≤ N ≤ 155`) |
+| `--sembrar-historia N` | Solo si el feed **no existe**: lo crea con los últimos `N` días hábiles de la fuente (`1 ≤ N ≤ 800`). Los puntos sembrados son historia oficial y no pasan por la guarda de anomalía |
 | `--today YYYY-MM-DD` | Fecha de referencia para la página de estado y las validaciones (por defecto, hoy en `America/Santiago`) |
 | `--force-anomaly` | Acepta un salto diario mayor a 5,00%, dejando registro del forzado |
 | `--out DIR` / `--status-page ARCHIVO` | Cambian las rutas de salida (por defecto `docs/quotes` y `docs/index.html`) |
@@ -84,8 +97,8 @@ los fondos fallidos.
 Cada corrida imprime una línea por fondo, por ejemplo:
 
 ```
-[OK] CFMITNIPSA fecha=2026-10-15 close=5054.2279 fuente=ledgifi:9019
-[OK] CFINRENTAS fecha=2026-10-15 close=2181.18 fuente=aindependencia:bolsa
+[OK] CFMITNIPSA fecha=2026-10-23 close=4937.2 fuente=dividendera:CFMITNIPSA nuevos=1
+[OK] CFINRENTAS fecha=2026-10-22 close=2181.73 fuente=dividendera:CFINRENTAS nuevos=3
 ```
 
 ## Configuración en Portfolio Performance

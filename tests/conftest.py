@@ -191,3 +191,25 @@ def html_independencia_con(html: str, puntos_bolsa: list[list[float]]) -> str:
     inicio = html.find("var vfiChartData")
     fin = html.find(";\n", inicio)
     return html[:inicio] + "var vfiChartData = " + bloque + html[fin:]
+
+
+def html_dividendera_con(
+    puntos: list[tuple[str, float]], nemo: str = "CFINRENTAS"
+) -> str:
+    """Página sintética de dividendera con la serie indicada (mismo payload real).
+
+    Los objetos van con las comillas escapadas, como en el chunk de Next.js, y se
+    rellena hasta pasar el piso de tamaño del adaptador.
+    """
+
+    from fund_quotes.sources import dividendera
+
+    objetos = ",".join(
+        f'{{\\"id\\":{posicion},\\"nemo\\":\\"{nemo}\\",'
+        f'\\"fecha\\":\\"$D{fecha}T00:00:00.000Z\\",'
+        f'\\"cierre\\":{cierre},\\"volumen\\":1000}}'
+        for posicion, (fecha, cierre) in enumerate(puntos)
+    )
+    cuerpo = '<script>self.__next_f.push([1,"[' + objetos + ']"])</script>'
+    relleno = " " * max(0, dividendera.MIN_BYTES - len(cuerpo) + 1024)
+    return "<html><body>" + cuerpo + relleno + "</body></html>"

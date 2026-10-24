@@ -1,4 +1,4 @@
-"""Contrato de archivo, merge append-only y escritura atómica.
+"""Contrato de archivo, merge append-only (multi-punto) y escritura atómica.
 
 El JSON publicado es determinista byte a byte: claves en orden fijo, ``indent=2``,
 UTF-8 sin BOM y un salto de línea final (REQ-STO-004).
@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -18,7 +19,7 @@ from .quote import MAX_CLOSE, Quote
 
 KEYS = ("ticker", "name", "currency", "source", "updated", "data")
 CURRENCY = "CLP"
-_TOLERANCIA = 1e-6
+_TOLERANCIA = 0.005
 
 
 class FeedError(Exception):
@@ -166,58 +167,174 @@ def read_feed(ruta: str | Path, fund: Fund) -> Feed | None:
     return _validar_contrato(datos, fund, ruta)
 
 
-def nuevo_feed(fund: Fund, quote: Quote, source: str | None = None) -> Feed:
+def _normalizar_serie(nuevos: Iterable[Quote]) -> list[Quote]:
+    """Serie ascendente y sin duplicados: si una fecha se repite, gana la última."""
+
+    por_fecha: dict[date, Quote] = {}
+    for punto in nuevos:
+        por_fecha[punto.date] = punto
+    return [por_fecha[fecha] for fecha in sorted(por_fecha)]
+
+
+def nuevo_feed(
+    fund: Fund, quotes: Quote | Iterable[Quote], source: str | None = None
+) -> Feed:
+    """Feed inicial con los puntos indicados (admite un punto o una serie)."""
+
+    serie = _normalizar_serie([quotes] if isinstance(quotes, Quote) else quotes)
+    if not serie:
+        raise FeedError(f"{fund.ticker}: no se puede crear un feed sin puntos")
     return Feed(
         ticker=fund.ticker,
         name=fund.name,
         currency=CURRENCY,
         source=source or fund.source,
-        updated=quote.date,
-        data=[quote],
+        updated=serie[-1].date,
+        data=serie,
     )
+
+
+@dataclass
+class MergeResult:
+    """Resultado de fusionar una serie con el feed previo.
+
+    ``agregados`` son los puntos efectivamente incorporados (ascendente) y
+    ``descartados`` los que no entraron por duplicado, conflicto de valor o
+    fecha anterior al último punto publicado.
+    """
+
+    feed: Feed
+    estado: str
+    agregados: list[Quote]
+    descartados: list[Quote]
+
+
+def primer_conflicto(
+    existente: Feed, nuevos: Iterable[Quote]
+) -> tuple[Quote, Quote] | None:
+    """(valor guardado, valor publicado) del primer punto con la misma fecha y otro valor."""
+
+    por_fecha = {punto.date: punto for punto in existente.data}
+    for punto in _normalizar_serie(nuevos):
+        previo = por_fecha.get(punto.date)
+        if previo is not None and abs(previo.close - punto.close) > _TOLERANCIA:
+            return previo, punto
+    return None
+
+
+def clasificar(existente: Feed | None, nuevos: Iterable[Quote]) -> str:
+    """Estado de un lote que no agrega puntos: ``conflicto``, ``antiguo`` o ``sin_cambios``."""
+
+    serie = _normalizar_serie(nuevos)
+    if existente is None or not serie:
+        return "sin_cambios"
+    por_fecha = {punto.date: punto for punto in existente.data}
+    for punto in serie:
+        previo = por_fecha.get(punto.date)
+        if previo is not None and abs(previo.close - punto.close) > _TOLERANCIA:
+            return "conflicto"
+    ultimo = existente.data[-1]
+    if all(punto.date < ultimo.date for punto in serie):
+        return "antiguo"
+    return "sin_cambios"
 
 
 def merge(
     existente: Feed | None,
-    quote: Quote,
+    nuevos: Quote | Iterable[Quote],
     fund: Fund,
     source: str | None = None,
-) -> tuple[Feed, str]:
-    """Fusiona un punto con el feed previo, sin reescribir historia.
+) -> MergeResult:
+    """Fusiona uno o varios puntos con el feed previo, sin reescribir historia.
 
-    Estados: ``nuevo``, ``agregado``, ``sin_cambios``, ``conflicto`` (mismo día
-    con otro valor) y ``antiguo`` (fecha anterior al último punto).
+    Se agregan **todos** los puntos con fecha posterior al último punto publicado;
+    los duplicados y los anteriores se descartan (``descartados``). El resultado
+    queda ascendente, sin fechas duplicadas y append-only.
 
-    ``source`` es la fuente que entregó el punto: queda registrada como ``source``
-    del feed (contrato §5.1) porque con la cadena primaria/respaldo la fuente
-    efectiva puede no ser la primaria del catálogo.
+    Estados: ``nuevo`` (no había feed), ``agregado`` (entró al menos un punto),
+    ``sin_cambios`` (todo ya estaba), ``conflicto`` (mismo día con otro valor) y
+    ``antiguo`` (todas las fechas son anteriores al último punto).
+
+    ``source`` es la fuente que entregó los puntos: queda registrada como
+    ``source`` del feed (contrato §5.1) porque con la cadena primaria/respaldo la
+    fuente efectiva puede no ser la primaria del catálogo.
     """
 
+    serie = _normalizar_serie([nuevos] if isinstance(nuevos, Quote) else nuevos)
+
     if existente is None:
-        return nuevo_feed(fund, quote, source), "nuevo"
+        feed = nuevo_feed(fund, serie, source)
+        return MergeResult(feed=feed, estado="nuevo", agregados=list(feed.data), descartados=[])
 
+    if not serie:
+        return MergeResult(feed=existente, estado="sin_cambios", agregados=[], descartados=[])
+
+    primera = existente.data[0].date
     por_fecha = {punto.date: punto for punto in existente.data}
-    if quote.date in por_fecha:
-        previo = por_fecha[quote.date]
-        if abs(previo.close - quote.close) <= _TOLERANCIA:
-            return existente, "sin_cambios"
-        return existente, "conflicto"
+    agregados: list[Quote] = []
+    descartados: list[Quote] = []
+    for punto in serie:
+        # Catch-up: entra toda fecha desconocida dentro del rango ya cubierto
+        # (rellena huecos por corridas caídas) y toda fecha posterior al último
+        # punto. Solo se descarta lo anterior al inicio del feed.
+        if punto.date in por_fecha or punto.date < primera:
+            descartados.append(punto)
+            continue
+        agregados.append(punto)
+        por_fecha[punto.date] = punto
+    agregados.sort(key=lambda punto: punto.date)
 
-    ultimo = existente.data[-1]
-    if quote.date < ultimo.date:
-        return existente, "antiguo"
+    if not agregados:
+        return MergeResult(
+            feed=existente,
+            estado=clasificar(existente, serie),
+            agregados=[],
+            descartados=descartados,
+        )
 
-    datos = list(existente.data)
-    datos.append(quote)
+    datos = sorted(list(existente.data) + agregados, key=lambda punto: punto.date)
     fusionado = Feed(
         ticker=existente.ticker,
         name=existente.name,
         currency=existente.currency,
         source=source or existente.source,
-        updated=quote.date,
+        updated=datos[-1].date,
         data=datos,
     )
-    return fusionado, "agregado"
+    return MergeResult(
+        feed=fusionado, estado="agregado", agregados=agregados, descartados=descartados
+    )
+
+
+def serie_habil(serie: Iterable[Quote]) -> list[Quote]:
+    """Puntos en día hábil (L-V), ascendentes y sin duplicados."""
+
+    return [punto for punto in _normalizar_serie(serie) if punto.date.weekday() < 5]
+
+
+def sembrar(
+    fund: Fund,
+    serie: Iterable[Quote],
+    dias: int,
+    source: str | None = None,
+) -> Feed:
+    """Feed inicial con los últimos ``dias`` días hábiles de la serie de la fuente.
+
+    La siembra es la única vía por la que se escribe historia anterior a la
+    primera corrida: no reescribe un feed existente (el CLI no la llama en ese
+    caso) y no pasa por la guarda de anomalía, porque son cierres oficiales ya
+    publicados por la fuente. Si la fuente trae menos días hábiles que ``dias``,
+    se siembra todo lo disponible.
+    """
+
+    if dias < 1:
+        raise FeedError(f"--sembrar-historia debe ser un entero positivo (recibido {dias})")
+    habiles = serie_habil(serie)
+    if not habiles:
+        raise FeedError(
+            f"{fund.ticker}: la fuente no trae días hábiles para sembrar la historia"
+        )
+    return nuevo_feed(fund, habiles[-dias:], source)
 
 
 def write_atomic(ruta: str | Path, contenido: bytes) -> None:

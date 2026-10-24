@@ -147,6 +147,11 @@ def test_ac04_fuente_sin_la_cuota_falla_sin_inventar(tmp_path, fuentes, capsys):
 
 
 def test_ac05_si_una_fuente_cae_se_publica_la_otra(tmp_path, fuentes, capsys):
+    # CFMITNIPSA cae en toda su cadena; CFINRENTAS se publica por su respaldo.
+    fuentes["error_d"] = FetchError(
+        "la fuente respondió HTTP 503 tras 3 intentos; posible bloqueo del proxy",
+        retryable=True,
+    )
     fuentes["error_a"] = FetchError(
         "la fuente respondió HTTP 429 tras 3 intentos; posible bloqueo del proxy",
         retryable=True,
@@ -165,7 +170,7 @@ def test_ac05_si_una_fuente_cae_se_publica_la_otra(tmp_path, fuentes, capsys):
         "close": 2181.18,
     }
     assert ruta_a.read_bytes() == antes_a
-    assert "[FALLA] CFMITNIPSA fuente=ledgifi:9019" in out
+    assert "[FALLA] CFMITNIPSA fuente=dividendera:CFMITNIPSA" in out
     assert "[FALLA] CFMITNIPSA" in err
     assert "[OK] CFINRENTAS" in out
 

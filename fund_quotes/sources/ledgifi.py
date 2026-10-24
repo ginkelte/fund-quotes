@@ -404,7 +404,7 @@ def parse_index(html: str) -> list[IndexPoint]:
     return puntos
 
 
-def cargar(con_indice: bool = False) -> tuple[Quote, list[IndexPoint] | None]:
+def cargar(con_indice: bool = False) -> tuple[list[Quote], list[IndexPoint] | None]:
     """Cuota por el modo markdown y respaldo HTML; el índice solo vive en el HTML.
 
     Precedencia (§4.1): primero markdown (jina renderiza el JS y pasa el
@@ -415,6 +415,9 @@ def cargar(con_indice: bool = False) -> tuple[Quote, list[IndexPoint] | None]:
     La serie de índice para ``--backfill`` sigue viniendo del modo HTML: si ese
     modo está bloqueado, el índice queda en ``None`` y el CLI degrada el backfill
     a un aviso no bloqueante (§5.2).
+
+    LedgiFi solo publica el último valor cuota: el contrato del adaptador es
+    devolver la lista de puntos que trae la fuente, acá de largo 1.
     """
 
     motivos: list[str] = []
@@ -457,4 +460,4 @@ def cargar(con_indice: bool = False) -> tuple[Quote, list[IndexPoint] | None]:
             indice = parse_index(html)
         except SourceError:
             indice = None
-    return quote, indice
+    return [quote], indice
