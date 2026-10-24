@@ -24,6 +24,13 @@ def html_independencia() -> str:
     return (FIXTURES / "aindependencia_fondos.html").read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="session")
+def md_ledgifi() -> str:
+    """Recorte verbatim del modo markdown de r.jina.ai (fila UNICA del 2026-10-22)."""
+
+    return (FIXTURES / "ledgifi_9019.md").read_text(encoding="utf-8")
+
+
 @pytest.fixture(autouse=True)
 def raiz_repo_temporal(tmp_path, monkeypatch):
     """Autoriza ``tmp_path`` como raíz del repo: los tests escriben ahí (§9)."""

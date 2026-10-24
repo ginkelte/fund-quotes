@@ -81,23 +81,177 @@ def test_indice_ausente_falla():
     assert "serie de índice" in str(excinfo.value)
 
 
-def test_cargar_hace_una_sola_peticion(monkeypatch, html_ledgifi):
+def test_cargar_usa_el_modo_markdown_primero(monkeypatch, md_ledgifi):
     llamadas = []
 
     def falso_fetch(*args, **kwargs):
         llamadas.append(kwargs)
-        return html_ledgifi
+        return md_ledgifi
 
     monkeypatch.setattr(ledgifi, "fetch_text", falso_fetch)
-    quote, indice = ledgifi.cargar(con_indice=True)
+    quote, indice = ledgifi.cargar()
     assert len(llamadas) == 1
-    assert quote.close == 5054.2279
-    assert indice is not None and len(indice) == 156
-    assert llamadas[0]["headers"] == {"x-return-format": "html"}
+    # El modo primario va sin x-return-format: con esa cabecera jina devuelve el
+    # checkpoint de Vercel en lugar de la ficha renderizada.
+    assert "headers" not in llamadas[0]
+    assert quote.date.isoformat() == "2026-10-22"
+    assert quote.close == 4963.6791
+    assert indice is None
     assert ledgifi.PROXY_URL.startswith("https://r.jina.ai/https://ledgifi.com/")
 
 
-def test_cargar_sin_indice_no_lo_parsea(monkeypatch, html_ledgifi):
-    monkeypatch.setattr(ledgifi, "fetch_text", lambda *a, **k: html_ledgifi)
+def test_cargar_sin_indice_no_lo_parsea(monkeypatch, md_ledgifi):
+    monkeypatch.setattr(ledgifi, "fetch_text", lambda *a, **k: md_ledgifi)
     _, indice = ledgifi.cargar()
+    assert indice is None
+
+
+# --- Modo primario: markdown de r.jina.ai ---------------------------------
+
+
+def test_parsea_la_cuota_del_markdown_real(md_ledgifi):
+    quote = ledgifi.parse_quote_markdown(md_ledgifi)
+    assert quote.date.isoformat() == "2026-10-22"
+    assert quote.close == 4963.6791
+
+
+def test_markdown_ubica_la_columna_por_encabezado_sin_tac():
+    # Variante de la tabla con menos columnas y en otro orden: el índice de
+    # 'Valor cuota' cambia, así que no se puede asumir una posición fija.
+    markdown = (
+        "Markdown Content:\n\n"
+        "| Serie | Patrimonio | Valor cuota | Aportantes |\n"
+        "| --- | --- | --- | --- |\n"
+        "| UNICA condición no publicada | $170.950 M | $4.963,6791 22 de octubre de 2026 | 38 |\n"
+        "\n"
+        + "relleno " * 140
+    )
+    quote = ledgifi.parse_quote_markdown(markdown)
+    assert quote.date.isoformat() == "2026-10-22"
+    assert quote.close == 4963.6791
+
+
+def test_markdown_con_encabezado_desplazado_y_fila_unica():
+    # Separadores con dos guiones y alineación explícita: el encabezado manda.
+    markdown = (
+        "| Serie | Volatilidad | Valor cuota |\n"
+        "| :-- | :-- | --: |\n"
+        "| UNICA condición no publicada | 17,2% | $5.054,2279 15 de octubre de 2026 |\n"
+        + "relleno " * 140
+    )
+    quote = ledgifi.parse_quote_markdown(markdown)
+    assert quote.date.isoformat() == "2026-10-15"
+    assert quote.close == 5054.2279
+
+
+def test_markdown_encuentra_la_serie_en_la_primera_celda_no_al_principio():
+    markdown = (
+        "| Serie | Valor cuota |\n| --- | --- |\n"
+        "| Serie ÚNICA | $4.963,6791 22 de octubre de 2026 |\n" + "relleno " * 140
+    )
+    quote = ledgifi.parse_quote_markdown(markdown)
+    assert quote.close == 4963.6791
+
+
+def test_markdown_con_el_checkpoint_de_vercel_falla_con_motivo():
+    checkpoint = (
+        "Title: Vercel Security Checkpoint\n\n"
+        "Markdown Content:\nVercel Security Checkpoint\n" + "x" * 1200
+    )
+    with pytest.raises(SourceError) as excinfo:
+        ledgifi.parse_quote_markdown(checkpoint)
+    assert "bloqueo" in str(excinfo.value)
+    assert "vercel security checkpoint" in str(excinfo.value).lower()
+
+
+def test_markdown_demasiado_pequeno_falla():
+    with pytest.raises(SourceError) as excinfo:
+        ledgifi.parse_quote_markdown("| Serie | Valor cuota |\n| --- | --- |")
+    assert "demasiado pequeña" in str(excinfo.value)
+
+
+def test_markdown_sin_fila_unica_falla():
+    markdown = (
+        "| Serie | Valor cuota |\n| --- | --- |\n"
+        "| B | $1.000,0000 22 de octubre de 2026 |\n" + "relleno " * 140
+    )
+    with pytest.raises(SourceError) as excinfo:
+        ledgifi.parse_quote_markdown(markdown)
+    assert "no se encontró la cuota de CFMITNIPSA" in str(excinfo.value)
+
+
+def test_markdown_sin_columna_valor_cuota_falla():
+    markdown = (
+        "| Serie | TAC |\n| --- | --- |\n| UNICA | No publicada |\n" + "relleno " * 140
+    )
+    with pytest.raises(SourceError) as excinfo:
+        ledgifi.parse_quote_markdown(markdown)
+    assert "Valor cuota" in str(excinfo.value)
+
+
+def test_markdown_bloqueado_cae_al_modo_html(monkeypatch, html_ledgifi):
+    checkpoint = "Title: Vercel Security Checkpoint\n" + "x" * 1200
+    llamadas = []
+
+    def falso_fetch(*args, **kwargs):
+        llamadas.append(kwargs)
+        if kwargs.get("headers") == ledgifi.CABECERAS_HTML:
+            return html_ledgifi
+        return checkpoint
+
+    monkeypatch.setattr(ledgifi, "fetch_text", falso_fetch)
+    quote, indice = ledgifi.cargar()
+    assert len(llamadas) == 2
+    assert quote.date.isoformat() == "2026-10-15"
+    assert quote.close == 5054.2279
+    assert indice is None
+
+
+def test_ambos_modos_bloqueados_falla_con_motivo_accionable(monkeypatch):
+    def falso_fetch(*args, **kwargs):
+        raise ledgifi.FetchError(
+            "la respuesta contiene una página de bloqueo (vercel security checkpoint); "
+            "no se intenta evadir el mecanismo del sitio",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(ledgifi, "fetch_text", falso_fetch)
+    with pytest.raises(SourceError) as excinfo:
+        ledgifi.cargar()
+    motivo = str(excinfo.value)
+    assert "modo markdown" in motivo
+    assert "modo HTML" in motivo
+    assert "vercel security checkpoint" in motivo.lower()
+
+
+def test_cargar_con_indice_pide_el_html_tras_el_markdown(monkeypatch, md_ledgifi, html_ledgifi):
+    llamadas = []
+
+    def falso_fetch(*args, **kwargs):
+        llamadas.append(kwargs)
+        return html_ledgifi if kwargs.get("headers") == ledgifi.CABECERAS_HTML else md_ledgifi
+
+    monkeypatch.setattr(ledgifi, "fetch_text", falso_fetch)
+    quote, indice = ledgifi.cargar(con_indice=True)
+    assert len(llamadas) == 2
+    assert "headers" not in llamadas[0]
+    assert llamadas[1]["headers"] == {"x-return-format": "html"}
+    assert quote.date.isoformat() == "2026-10-22"
+    # El índice solo existe en el HTML; el último punto del fixture es el 15-10.
+    assert indice is not None and indice[-1].date.isoformat() == "2026-10-15"
+
+
+def test_backfill_degrada_si_el_modo_html_esta_bloqueado(monkeypatch, md_ledgifi):
+    def falso_fetch(*args, **kwargs):
+        if kwargs.get("headers") == ledgifi.CABECERAS_HTML:
+            raise ledgifi.FetchError(
+                "respuesta demasiado pequeña (5263 bytes < 10000); posible bloqueo",
+                retryable=True,
+            )
+        return md_ledgifi
+
+    monkeypatch.setattr(ledgifi, "fetch_text", falso_fetch)
+    quote, indice = ledgifi.cargar(con_indice=True)
+    # La cuota se publica igual; el índice queda en None y el CLI avisa (§5.2).
+    assert quote.close == 4963.6791
     assert indice is None

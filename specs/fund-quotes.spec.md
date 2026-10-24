@@ -3,13 +3,13 @@ spec-id: fund-quotes
 id: fund-quotes
 title: Feed de cotizaciones diarias para dos fondos chilenos
 status: draft
-version: 1.0.0
+version: 1.1.0
 layer: data
 tags: [cotizaciones, fondos, chile, portfolio-performance, github-pages, append-only]
 acceptance: specs/fund-quotes.feature
 owner: Vichoko
 created: 2026-10-19
-updated: 2026-10-19
+updated: 2026-10-24
 ---
 
 # Feed de cotizaciones diarias — dos fondos chilenos
@@ -60,20 +60,46 @@ hipótesis explícita antes de implementarse.
 
 | # | Fondo | URL | Selector de parseo | Formato numérico / fecha | Riesgo | Fallback |
 |---|---|---|---|---|---|---|
-| A | CFMITNIPSA | `https://ledgifi.com/chile/fondos/fondo/9019` leída vía `https://r.jina.ai/<URL>` con header `x-return-format: html` | Fila de la tabla de series cuyo nombre de serie es `UNICA`/`ÚNICA`; columna `Valor cuota`. Fecha en el texto de actualización de la tabla (`"15 de octubre de 2026"`) | `$5.054,2279` → punto de miles, coma decimal, 4 decimales. Fecha en español, día-mes-año | HTTP directo responde **429 + "Vercel Security Checkpoint"** (challenge JS). Riesgo de cambio de layout, de rate limit del proxy o de caída del proxy | 2 reintentos con backoff (5 s, 15 s) vía proxy. Si persiste: el fondo falla ruidosamente, no se escribe punto. Sin fuente oficial alternativa verificada |
+| A | CFMITNIPSA | `https://ledgifi.com/chile/fondos/fondo/9019` leída vía `https://r.jina.ai/<URL>`: **modo markdown** (sin `x-return-format`) y, si está bloqueado, **modo HTML** (`x-return-format: html`) — ver §4.1 | Fila de la tabla de series cuya primera celda nombra la serie `UNICA`/`ÚNICA`; columna `Valor cuota`, ubicada por encabezado. Fecha en la misma celda o en el texto de actualización (`"15 de octubre de 2026"`) | `$5.054,2279` → punto de miles, coma decimal, 4 decimales. Fecha en español, día-mes-año | HTTP directo responde **429 + "Vercel Security Checkpoint"** (challenge JS); el modo HTML del proxy a veces recibe esa misma página. Riesgo de cambio de layout, de rate limit del proxy o de caída del proxy | 2 reintentos con backoff (5 s, 15 s) por modo. Si ambos modos fallan: el fondo falla ruidosamente con el motivo de cada modo, no se escribe punto. Sin fuente oficial alternativa verificada |
 | B | CFINRENTAS | `https://www.aindependencia.cl/fondos/` (HTTP 200, HTML plano, ~334 KB) | JS inline `window.vfiChartData = {...}`; serie `"BOLSA"`; último par `[epoch_ms, precio]` | Precio flotante de 2 decimales. `epoch_ms` en **UTC** (ver §4.2) | Rediseño del sitio o cambio de nombre/forma de la serie; la serie `"Valor Libro"` tiene otra escala y no debe usarse | 2 reintentos con backoff. Si falta la serie `"BOLSA"`: el fondo falla ruidosamente, no se escribe punto |
 
 ### 4.1 Fuente A — LedgiFi (CFMITNIPSA, RUN 9019-0)
 
-- El HTML pesado (~500 KB) se obtiene con `x-return-format: html` para no depender del markdown.
-- El parseo se hace con `html.parser.HTMLParser` (stdlib) sobre las filas de tabla, localizando el
-  encabezado `Valor cuota` por índice de columna; **no** se usan expresiones regulares sobre texto
-  plano para la tabla. Si no existe la fila de la serie `UNICA`, el adaptador lanza error.
+- El sitio está detrás de Vercel y responde `429 + "Vercel Security Checkpoint"` (challenge JS) al
+  HTTP directo, así que se lee **solo** a través de `r.jina.ai`. El proxy tiene dos modos y el
+  adaptador los intenta **en este orden**:
+  1. **Primario — markdown:** `GET https://r.jina.ai/<URL>` **sin** `x-return-format`. El fetcher
+     de jina renderiza el JS, pasa el challenge y devuelve ~3 KB de markdown con la tabla de series.
+  2. **Respaldo — HTML:** `GET https://r.jina.ai/<URL>` con `x-return-format: html`. Ese fetcher
+     recibe intermitentemente la página "Vercel Security Checkpoint" (~5 KB) en lugar de la ficha.
+     Además es el **único** modo que trae la serie de índice de §5.2, por lo que se usa siempre que
+     se pide `--backfill`.
+- **Se pasa al respaldo** si el modo markdown devuelve una página de bloqueo (firma
+  `Vercel Security Checkpoint`, `Just a moment` o `cf-chl`), un cuerpo menor a 1 KB, o un cuerpo sin
+  la fila de la serie `UNICA`. Si el respaldo también falla, el adaptador lanza `SourceError`
+  nombrando **qué se intentó y qué devolvió cada modo** —por ejemplo
+  `modo markdown: …página de bloqueo (vercel security checkpoint); modo HTML: respuesta demasiado
+  pequeña (5263 bytes < 10000)`— y el fondo falla ruidosamente sin escribir punto (AC-04, AC-05).
+- En el modo markdown la columna se ubica por el **encabezado** `Valor cuota` (el número de columnas
+  varía entre variantes de la tabla: `Serie`, `Rentabilidad 1 año`, `TAC`, `Volatilidad`,
+  `Sharpe estimado`, `Aportantes`, `Patrimonio`, `Valor cuota`); nunca por posición fija. La fila es
+  la cuya primera celda nombra la serie `UNICA`. Esa celda trae el valor y la fecha juntos
+  (`$4.963,6791 22 de octubre de 2026`): se extrae el número, se normaliza con `REQ-ADP-003` y la
+  fecha se parsea del mismo texto.
+- En el modo HTML el parseo se hace con `html.parser.HTMLParser` (stdlib) sobre las filas de tabla,
+  localizando el encabezado `Valor cuota` por índice de columna; **no** se usan expresiones
+  regulares sobre texto plano para la tabla. Si no existe la fila de la serie `UNICA`, el adaptador
+  lanza error.
 - Las demás series del fondo (si existieran) se ignoran: el instrumento en PP es la serie única.
 - La página embebe además una serie histórica semimensual en el HTML: pares
   `{"d":"YYYY-MM-DD","v":<índice>}` con base 100 al 2016-01-01 y 156 puntos (último
   `2026-10-15` = `173.8262101046597`). Esa serie **no es una cotización oficial**: solo se usa para
-  el backfill derivado de §6 (`REQ-ADP-004`), en un archivo separado.
+  el backfill derivado de §6 (`REQ-ADP-004`), en un archivo separado. Solo existe en el modo HTML:
+  si ese modo está bloqueado, el backfill se degrada al aviso no bloqueante de §5.2 y la cuota se
+  publica igual.
+- Evidencia vigente (verificada 2026-10-24): el modo markdown devuelve la cuota `4.963,6791` al
+  `22 de octubre de 2026` (−1,79% desde `5.054,2279` del 15-10, dentro de la guarda de 5%); el modo
+  HTML con `x-return-format: html` devuelve intermitentemente la página de checkpoint.
 
 ### 4.2 Fuente B — Independencia (CFINRENTAS, RUN 7014-9)
 
@@ -305,7 +331,7 @@ Reglas transversales:
 | EC-002 | Fecha de fuente posterior a hoy + 1 día | Se rechaza el punto como fecha implausible (posible error de zona horaria), código `3` |
 | EC-003 | Fecha de fuente anterior al último punto guardado | No-op informativo, código `0` |
 | EC-004 | No existe feed previo | Se crea con el punto de la fuente; la guarda de anomalía no aplica por falta de referencia |
-| EC-005 | Respuesta con "Vercel Security Checkpoint", status 429, o cuerpo menor a 10 KB | Se trata como bloqueo: reintenta y luego falla ruidosamente |
+| EC-005 | Respuesta con "Vercel Security Checkpoint", status 429, o cuerpo menor al umbral (10 KB en modo HTML, 1 KB en modo markdown) | Se trata como bloqueo: en la Fuente A se intenta el otro modo (§4.1); si ambos fallan, reintenta y luego falla ruidosamente |
 | EC-006 | Valor con notación científica, sin decimales, o formato ambiguo (`1,234.56`) | Se rechaza por formato (`REQ-ADP-003`), no se adivina |
 | EC-007 | Cada adaptador entrega exactamente un punto por corrida | El escenario de varios días nuevos no aplica en v1 (queda fuera de alcance) |
 | EC-008 | Falla de escritura (permisos, disco lleno) | El archivo original queda intacto; código `1` |
@@ -319,7 +345,8 @@ Reglas transversales:
 - **Sin datos personales**: el repo es público. No se publican RUT, montos, número de cuotas ni
   ninguna cifra de la cartera. Solo se citan datos públicos de los fondos (RUN, nombre, tipo CMF).
 - **Superficie de red acotada**: allowlist de hosts, HTTPS obligatorio, sin seguir redirecciones a
-  otros dominios, tope de 2 MB, timeout 30 s, una petición por fuente y ejecución.
+  otros dominios, tope de 2 MB, timeout 30 s, y a lo sumo dos peticiones por fuente y ejecución
+  (modo markdown y su respaldo HTML, más la del índice cuando se pide `--backfill`).
 - **Sin ejecución de código remoto**: el JS de la Fuente B se extrae como texto y se pasa por
   `json.loads`; nunca por `eval`/`exec`.
 - **Sin path traversal**: los tickers provienen del catálogo (allowlist) y se validan con
