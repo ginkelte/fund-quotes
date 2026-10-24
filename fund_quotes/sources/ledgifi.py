@@ -1,9 +1,18 @@
 """Fuente A — LedgiFi, fondo 9019 (CFMITNIPSA, serie UNICA).
 
 El sitio responde 429 con un checkpoint de Vercel si se consulta directo, por lo
-que se lee a través de ``r.jina.ai`` pidiendo el HTML completo. La tabla se
-parsea con ``html.parser`` localizando la columna ``Valor cuota`` por índice de
-encabezado, nunca con expresiones regulares sobre el texto de la tabla.
+que se lee a través de ``r.jina.ai``. Hay dos modos y un orden fijo:
+
+- **Primario, markdown** (sin ``x-return-format``): jina renderiza el JS y pasa
+  el challenge, y entrega la tabla de series ya convertida a tabla markdown.
+- **Respaldo, HTML** (con ``x-return-format: html``): su fetcher a veces recibe
+  la página "Vercel Security Checkpoint"; además es la única fuente de la serie
+  de índice que alimenta el ``--backfill``.
+
+La tabla HTML se parsea con ``html.parser`` localizando la columna ``Valor
+cuota`` por encabezado; la tabla markdown también se ubica por encabezado (el
+número de columnas varía entre variantes), nunca con expresiones regulares
+sobre el texto completo.
 """
 
 from __future__ import annotations
@@ -15,7 +24,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 
-from ..fetch import fetch_text
+from ..fetch import FetchError, fetch_text
 from ..quote import Quote, QuoteFormatError, normalize_close, parse_fecha_es
 from . import SourceError
 
@@ -25,6 +34,18 @@ FUENTE = "ledgifi:9019"
 
 ENCABEZADO_VALOR = "valor cuota"
 SERIE = "UNICA"
+
+# Modos de lectura del proxy. El markdown va sin cabecera extra a propósito.
+CABECERAS_HTML = {"x-return-format": "html"}
+MIN_BYTES_MARKDOWN = 1_000
+MIN_BYTES_HTML = 10_000
+
+# Firmas de página de bloqueo: si aparecen, el cuerpo no es la ficha del fondo.
+_BLOQUEO_MARCAS = (
+    "vercel security checkpoint",
+    "just a moment",
+    "cf-chl",
+)
 
 _VACIOS = frozenset({"br", "img", "hr", "input", "meta", "link", "source", "wbr", "col"})
 
@@ -235,6 +256,116 @@ def parse_quote(html: str) -> Quote:
     return Quote(date=fecha, close=cierre)
 
 
+def _celdas_markdown(linea: str) -> list[str]:
+    """Separa una fila markdown ``| a | b |`` en celdas sin los delimitadores."""
+
+    texto = linea.strip().removeprefix("|").removesuffix("|")
+    return [celda.strip() for celda in texto.split("|")]
+
+
+def _es_separador(celdas: list[str]) -> bool:
+    """Fila de guiones que markdown intercala entre encabezado y cuerpo."""
+
+    return bool(celdas) and all(re.fullmatch(r":?-+:?", celda) for celda in celdas)
+
+
+_SERIE_UNICA = re.compile(r"\bunica\b")
+
+
+def _es_fila_unica(celdas: list[str]) -> bool:
+    """La fila de la serie pedida: la primera celda nombra la serie ``UNICA``."""
+
+    return bool(celdas) and _SERIE_UNICA.search(_normalizar(celdas[0])) is not None
+
+
+def _bloqueo_markdown(markdown: str) -> str | None:
+    """Devuelve la marca de bloqueo encontrada, si el cuerpo no es la ficha."""
+
+    minusculas = markdown.lower()
+    for marca in _BLOQUEO_MARCAS:
+        if marca in minusculas:
+            return marca
+    return None
+
+
+def parse_quote_markdown(markdown: str) -> Quote:
+    """Extrae la cuota de la tabla markdown que entrega jina en modo primario.
+
+    El valor viene en la misma celda que la fecha (``$4.963,6791 22 de octubre de
+    2026``) y el número de columnas varía entre variantes de la tabla, por lo que
+    la columna se ubica por el encabezado ``Valor cuota`` y nunca por posición
+    fija.
+    """
+
+    if not isinstance(markdown, str) or not markdown.strip():
+        raise SourceError("la respuesta de LedgiFi en modo markdown está vacía")
+
+    marca = _bloqueo_markdown(markdown)
+    if marca is not None:
+        raise SourceError(
+            "la respuesta de LedgiFi en modo markdown es una página de bloqueo "
+            f"({marca}); el challenge de Vercel no se resolvió"
+        )
+
+    tamano = len(markdown.encode("utf-8"))
+    if tamano < MIN_BYTES_MARKDOWN:
+        raise SourceError(
+            f"la respuesta de LedgiFi en modo markdown es demasiado pequeña "
+            f"({tamano} bytes < {MIN_BYTES_MARKDOWN}); posible página de error"
+        )
+
+    columna: int | None = None
+    fila_serie: list[str] | None = None
+    for linea in markdown.splitlines():
+        if not linea.strip().startswith("|"):
+            continue
+        celdas = _celdas_markdown(linea)
+        if _es_separador(celdas):
+            continue
+        normalizadas = [_normalizar(celda) for celda in celdas]
+        if columna is None:
+            if ENCABEZADO_VALOR in normalizadas:
+                columna = normalizadas.index(ENCABEZADO_VALOR)
+            continue
+        if _es_fila_unica(celdas):
+            fila_serie = celdas
+            break
+
+    if columna is None:
+        raise SourceError(
+            "no se encontró la cuota de CFMITNIPSA: la tabla markdown de LedgiFi "
+            f"no tiene la columna 'Valor cuota' (posible cambio de layout en {URL})"
+        )
+    if fila_serie is None or len(fila_serie) <= columna:
+        raise SourceError(
+            "no se encontró la cuota de CFMITNIPSA: la tabla markdown de LedgiFi no "
+            f"trae la fila de la serie {SERIE} con 'Valor cuota' (posible cambio de layout)"
+        )
+
+    celda = fila_serie[columna]
+    coincidencia = re.search(r"\$?\s*\d[\d.,]*", celda)
+    if coincidencia is None:
+        raise SourceError(
+            "no se encontró la cuota de CFMITNIPSA: la celda 'Valor cuota' del modo "
+            f"markdown no trae un número ({celda!r})"
+        )
+    texto_valor = coincidencia.group(0).strip()
+    try:
+        cierre = normalize_close(texto_valor)
+    except QuoteFormatError as exc:
+        raise SourceError(
+            f"no se encontró la cuota de CFMITNIPSA: valor con formato inválido "
+            f"({texto_valor!r}): {exc}"
+        ) from None
+
+    try:
+        fecha = parse_fecha_es(celda)
+    except QuoteFormatError as exc:
+        raise SourceError(f"no se encontró la fecha de la cuota de CFMITNIPSA: {exc}") from None
+
+    return Quote(date=fecha, close=cierre)
+
+
 def parse_index(html: str) -> list[IndexPoint]:
     """Serie de índice semimensual embebida (base 100 al 2016-01-01).
 
@@ -274,13 +405,56 @@ def parse_index(html: str) -> list[IndexPoint]:
 
 
 def cargar(con_indice: bool = False) -> tuple[Quote, list[IndexPoint] | None]:
-    """Una sola petición a la fuente; parsea cuota y, si se pide, el índice."""
+    """Cuota por el modo markdown y respaldo HTML; el índice solo vive en el HTML.
 
-    html = fetch_text(
-        PROXY_URL,
-        headers={"x-return-format": "html"},
-        min_bytes=10_000,
-    )
-    quote = parse_quote(html)
-    indice = parse_index(html) if con_indice else None
+    Precedencia (§4.1): primero markdown (jina renderiza el JS y pasa el
+    challenge de Vercel); si ese cuerpo es una página de bloqueo, es demasiado
+    pequeño o no trae la fila ``UNICA``, se intenta el modo HTML. Si ambos modos
+    fallan se lanza ``SourceError`` con lo que devolvió cada uno.
+
+    La serie de índice para ``--backfill`` sigue viniendo del modo HTML: si ese
+    modo está bloqueado, el índice queda en ``None`` y el CLI degrada el backfill
+    a un aviso no bloqueante (§5.2).
+    """
+
+    motivos: list[str] = []
+
+    # 1) Modo primario: markdown, sin x-return-format.
+    quote: Quote | None = None
+    try:
+        markdown = fetch_text(PROXY_URL, min_bytes=MIN_BYTES_MARKDOWN)
+    except FetchError as exc:
+        motivos.append(f"modo markdown: {exc.motivo}")
+    else:
+        try:
+            quote = parse_quote_markdown(markdown)
+        except SourceError as exc:
+            motivos.append(f"modo markdown: {exc}")
+
+    # 2) Modo de respaldo: HTML. También se pide si hace falta el índice.
+    html: str | None = None
+    if quote is None or con_indice:
+        try:
+            html = fetch_text(PROXY_URL, headers=CABECERAS_HTML, min_bytes=MIN_BYTES_HTML)
+        except FetchError as exc:
+            motivos.append(f"modo HTML: {exc.motivo}")
+        else:
+            if quote is None:
+                try:
+                    quote = parse_quote(html)
+                except SourceError as exc:
+                    motivos.append(f"modo HTML: {exc}")
+
+    if quote is None:
+        raise SourceError(
+            "no se pudo obtener la cuota de CFMITNIPSA: se intentó el modo markdown "
+            f"y el modo HTML del proxy; {'; '.join(motivos)}"
+        )
+
+    indice = None
+    if con_indice and html:
+        try:
+            indice = parse_index(html)
+        except SourceError:
+            indice = None
     return quote, indice
