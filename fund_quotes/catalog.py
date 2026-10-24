@@ -1,4 +1,9 @@
-"""Registro estático de los fondos soportados (allowlist de tickers)."""
+"""Registro estático de los fondos soportados (allowlist de tickers).
+
+Cada fondo declara su **cadena de fuentes** en orden de precedencia: la primera es
+la primaria y las siguientes son respaldos que el CLI intenta si la anterior
+lanza ``FetchError``/``SourceError`` (§4).
+"""
 
 from __future__ import annotations
 
@@ -14,15 +19,26 @@ class CatalogError(ValueError):
 
 @dataclass(frozen=True)
 class Fund:
-    """Un fondo del catálogo, con su fuente verificada."""
+    """Un fondo del catálogo, con su cadena de fuentes verificadas."""
 
     ticker: str
     name: str
     run: str
-    source: str
+    sources: tuple[str, ...]
     url: str
-    adapter: str
     supports_backfill: bool = False
+
+    @property
+    def source(self) -> str:
+        """Fuente primaria (la primera de la cadena)."""
+
+        return self.sources[0]
+
+    @property
+    def adapter(self) -> str:
+        """Nombre del adaptador de la fuente primaria."""
+
+        return self.source.partition(":")[0]
 
 
 FUNDS: tuple[Fund, ...] = (
@@ -30,18 +46,20 @@ FUNDS: tuple[Fund, ...] = (
         ticker="CFMITNIPSA",
         name="FM IT NOW S&P IPSA",
         run="9019-0",
-        source="ledgifi:9019",
+        # LedgiFi publica el valor cuota oficial (NAV); dividendera publica el
+        # cierre bursátil y difiere ~0,15%, por eso va solo como respaldo.
+        sources=("ledgifi:9019", "dividendera:CFMITNIPSA"),
         url="https://ledgifi.com/chile/fondos/fondo/9019",
-        adapter="ledgifi",
         supports_backfill=True,
     ),
     Fund(
         ticker="CFINRENTAS",
         name="FI Independencia Rentas Inmobiliarias",
         run="7014-9",
-        source="aindependencia:bolsa",
-        url="https://www.aindependencia.cl/fondos/",
-        adapter="aindependencia",
+        # La serie BOLSA de aindependencia está congelada desde 2026-10-19; se
+        # mantiene como respaldo porque es la misma serie que publica dividendera.
+        sources=("dividendera:CFINRENTAS", "aindependencia:bolsa"),
+        url="https://www.dividendera.cl/CFINRENTAS",
         supports_backfill=False,
     ),
 )

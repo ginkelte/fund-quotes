@@ -177,15 +177,24 @@ def nuevo_feed(fund: Fund, quote: Quote, source: str | None = None) -> Feed:
     )
 
 
-def merge(existente: Feed | None, quote: Quote, fund: Fund) -> tuple[Feed, str]:
+def merge(
+    existente: Feed | None,
+    quote: Quote,
+    fund: Fund,
+    source: str | None = None,
+) -> tuple[Feed, str]:
     """Fusiona un punto con el feed previo, sin reescribir historia.
 
     Estados: ``nuevo``, ``agregado``, ``sin_cambios``, ``conflicto`` (mismo día
     con otro valor) y ``antiguo`` (fecha anterior al último punto).
+
+    ``source`` es la fuente que entregó el punto: queda registrada como ``source``
+    del feed (contrato §5.1) porque con la cadena primaria/respaldo la fuente
+    efectiva puede no ser la primaria del catálogo.
     """
 
     if existente is None:
-        return nuevo_feed(fund, quote), "nuevo"
+        return nuevo_feed(fund, quote, source), "nuevo"
 
     por_fecha = {punto.date: punto for punto in existente.data}
     if quote.date in por_fecha:
@@ -204,7 +213,7 @@ def merge(existente: Feed | None, quote: Quote, fund: Fund) -> tuple[Feed, str]:
         ticker=existente.ticker,
         name=existente.name,
         currency=existente.currency,
-        source=existente.source,
+        source=source or existente.source,
         updated=quote.date,
         data=datos,
     )
