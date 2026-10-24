@@ -46,18 +46,19 @@ FUNDS: tuple[Fund, ...] = (
         ticker="CFMITNIPSA",
         name="FM IT NOW S&P IPSA",
         run="9019-0",
-        # LedgiFi publica el valor cuota oficial (NAV); dividendera publica el
-        # cierre bursátil y difiere ~0,15%, por eso va solo como respaldo.
-        sources=("ledgifi:9019", "dividendera:CFMITNIPSA"),
-        url="https://ledgifi.com/chile/fondos/fondo/9019",
+        # Dividendera entrega el cierre bursátil (BCS) completo —la misma serie
+        # histórica—, así que es la primaria; difiere ~0,15% del valor cuota
+        # oficial (NAV) que publica LedgiFi, que queda como respaldo.
+        sources=("dividendera:CFMITNIPSA", "ledgifi:9019"),
+        url="https://www.dividendera.cl/CFMITNIPSA",
         supports_backfill=True,
     ),
     Fund(
         ticker="CFINRENTAS",
         name="FI Independencia Rentas Inmobiliarias",
         run="7014-9",
-        # La serie BOLSA de aindependencia está congelada desde 2026-10-19; se
-        # mantiene como respaldo porque es la misma serie que publica dividendera.
+        # Misma serie BCS que dividendera; la serie BOLSA de aindependencia está
+        # congelada desde 2026-10-19 y se mantiene solo como respaldo.
         sources=("dividendera:CFINRENTAS", "aindependencia:bolsa"),
         url="https://www.dividendera.cl/CFINRENTAS",
         supports_backfill=False,

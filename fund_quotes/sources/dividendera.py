@@ -1,15 +1,17 @@
-"""Fuente C — Dividendera (CFINRENTAS primaria; respaldo de CFMITNIPSA).
+"""Fuente C — Dividendera (primaria de CFINRENTAS y de CFMITNIPSA).
 
 ``https://www.dividendera.cl/<NEMO>`` es una app Next.js que responde HTTP 200
 directo (sin proxy ni captcha) y embebe los cierres diarios de la Bolsa de
 Santiago en los chunks ``self.__next_f.push([1,"..."])``. Cada punto es un objeto
 ``{"id":…,"nemo":…,"fecha":"$D<YYYY-MM-DD>T00:00:00.000Z","cierre":…,"volumen":…}``
-cuyas comillas pueden venir escapadas (``\\"nemo\\"``) o no, según el chunk.
+cuyas comillas pueden venir escapadas (``\"nemo\"``) o no, según el chunk.
 
 La extracción es por expresión regular anclada en ``nemo``/``fecha``/``cierre``
 dentro del **mismo** objeto (``[^{}]*?`` impide cruzar de un objeto a otro);
-nunca se usa ``eval``/``exec``. Se recorren todos los puntos y se devuelve el de
-fecha mayor, porque el orden del payload no está garantizado.
+nunca se usa ``eval``/``exec``. Se recorren **todos** los puntos, se deduplica
+por fecha y se devuelven ordenados de forma ascendente: el adaptador entrega la
+serie completa (2400+ puntos desde 2017) y el recorte lo decide el store/CLI
+(catch-up y siembra de historia).
 
 La fecha ``$D`` ya es el día bursátil en hora de Chile: se usa el ``YYYY-MM-DD``
 literal, sin conversión desde UTC (§4.3).
@@ -93,8 +95,8 @@ def _marca_de_bloqueo(html: str) -> str | None:
     return None
 
 
-def parse_quote(html: str, nemo: str) -> Quote:
-    """Cotización del punto de fecha máxima del nemo, o ``SourceError``."""
+def parse_series(html: str, nemo: str) -> list[Quote]:
+    """Serie completa del nemo, ascendente por fecha y sin duplicados."""
 
     if not isinstance(html, str) or not html:
         raise SourceError(f"la respuesta de dividendera para {nemo} está vacía")
@@ -114,8 +116,9 @@ def parse_quote(html: str, nemo: str) -> Quote:
             "de cierres, no una página de error"
         )
 
-    mejor_fecha: date | None = None
-    mejor_valor: Decimal | None = None
+    # Un dict por fecha: si el payload repite una fecha, prevalece la última
+    # lectura y la serie nunca queda con duplicados.
+    por_fecha: dict[date, Decimal] = {}
     for coincidencia in _patron(nemo).finditer(html):
         try:
             fecha = date.fromisoformat(coincidencia.group(1))
@@ -127,26 +130,41 @@ def parse_quote(html: str, nemo: str) -> Quote:
             continue
         if not valor.is_finite() or valor <= 0:
             continue
-        if mejor_fecha is None or fecha > mejor_fecha:
-            mejor_fecha = fecha
-            mejor_valor = valor
+        por_fecha[fecha] = valor
 
-    if mejor_fecha is None or mejor_valor is None:
+    if not por_fecha:
         raise SourceError(
             f"dividendera no trae cierres para {nemo} (posible cambio de nemo o de layout)"
         )
 
-    try:
-        cierre = close_desde_decimal(mejor_valor)
-    except QuoteFormatError as exc:
-        raise SourceError(
-            f"el cierre de dividendera para {nemo} no es válido: {exc}"
-        ) from None
-    return Quote(date=mejor_fecha, close=cierre)
+    serie: list[Quote] = []
+    for fecha in sorted(por_fecha):
+        try:
+            cierre = close_desde_decimal(por_fecha[fecha])
+        except QuoteFormatError as exc:
+            raise SourceError(
+                f"el cierre de dividendera para {nemo} del {fecha.isoformat()} no es válido: {exc}"
+            ) from None
+        serie.append(Quote(date=fecha, close=cierre))
+    return serie
 
 
-def cargar(nemo: str, con_indice: bool = False) -> tuple[Quote, None]:
-    """Una sola petición a la ficha del nemo. Esta fuente no expone serie de índice."""
+def parse_quote(html: str, nemo: str) -> Quote:
+    """Cotización del punto de fecha máxima del nemo, o ``SourceError``.
 
-    quote = parse_quote(fetch_text(url_de(nemo), min_bytes=MIN_BYTES), nemo)
-    return quote, None
+    Se conserva para las verificaciones puntuales; el contrato del adaptador es
+    :func:`parse_series`.
+    """
+
+    return parse_series(html, nemo)[-1]
+
+
+def cargar(nemo: str, con_indice: bool = False) -> tuple[list[Quote], None]:
+    """Una sola petición a la ficha del nemo; devuelve la serie completa.
+
+    El adaptador no recorta: el catch-up y la siembra los decide el store.
+    Esta fuente no expone serie de índice.
+    """
+
+    serie = parse_series(fetch_text(url_de(nemo), min_bytes=MIN_BYTES), nemo)
+    return serie, None

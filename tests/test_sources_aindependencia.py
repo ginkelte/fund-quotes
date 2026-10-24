@@ -92,8 +92,10 @@ def test_respuesta_vacia_falla():
 
 def test_cargar_no_expone_indice(monkeypatch, html_independencia):
     monkeypatch.setattr(aindependencia, "fetch_text", lambda *a, **k: html_independencia)
-    quote, indice = aindependencia.cargar(con_indice=True)
-    assert quote.close == 2181.18
+    serie, indice = aindependencia.cargar(con_indice=True)
+    # Solo publica el último punto BOLSA: list[Quote] de largo 1.
+    assert len(serie) == 1
+    assert serie[0].close == 2181.18
     assert indice is None
 
 

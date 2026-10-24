@@ -186,8 +186,12 @@ def test_cargar_pide_la_url_del_nemo_con_el_piso_de_tamano(
         return html_dividendera_cfinrentas
 
     monkeypatch.setattr(dividendera, "fetch_text", falso)
-    quote, indice = dividendera.cargar("CFINRENTAS")
+    serie, indice = dividendera.cargar("CFINRENTAS")
 
-    assert quote.close == 2181.73
+    # El adaptador no recorta: entrega todos los cierres que trae la ficha.
+    assert len(serie) > 1
+    assert serie[-1].close == 2181.73
+    assert serie[-1].date.isoformat() == "2026-10-22"
+    assert serie == sorted(serie, key=lambda punto: punto.date)
     assert indice is None
     assert llamadas == [("https://www.dividendera.cl/CFINRENTAS", MIN)]

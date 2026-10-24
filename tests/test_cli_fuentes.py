@@ -125,73 +125,102 @@ def test_sin_cambios_reporta_la_fuente_usada(tmp_path, fuentes, capsys, html_div
     )
 
 
-# ── CFMITNIPSA: ledgifi primaria (NAV), dividendera respaldo ─────────────────
+# ── CFMITNIPSA: dividendera primaria (cierre BCS), ledgifi respaldo (NAV) ────
 
 
-def test_cfmitnipsa_si_cae_ledgifi_usa_dividendera_y_avisa(
+def test_cfmitnipsa_publica_con_dividendera_como_primaria(
     tmp_path, fuentes, capsys, html_dividendera_cfmitnipsa
 ):
-    fuentes["error_a"] = FetchError(
-        "la fuente respondió HTTP 429 tras 3 intentos; posible bloqueo del proxy",
-        retryable=True,
-    )
     fuentes["error_d"] = None
     fuentes["d"] = html_dividendera_cfmitnipsa
     ruta = escribir_feed(
         tmp_path / "quotes" / "CFMITNIPSA.json",
-        feed_de("CFMITNIPSA", [(date(2026, 10, 15), 5054.2279), (date(2026, 10, 22), 4963.6791)]),
+        feed_de("CFMITNIPSA", [(date(2026, 10, 15), 5046.8), (date(2026, 10, 22), 4978.3)]),
     )
 
-    codigo, out, _ = correr(_args(tmp_path, "2026-10-23", fondo="CFMITNIPSA"), capsys)
+    codigo, out, err = correr(_args(tmp_path, "2026-10-23", fondo="CFMITNIPSA"), capsys)
 
     datos = leer_json(ruta)
     assert codigo == 0
+    assert err == ""
     assert datos["data"][:2] == [
-        {"date": "2026-10-15", "close": 5054.2279},
-        {"date": "2026-10-22", "close": 4963.6791},
+        {"date": "2026-10-15", "close": 5046.8},
+        {"date": "2026-10-22", "close": 4978.3},
     ]
     assert datos["data"][-1] == {"date": "2026-10-23", "close": 4937.2}
     assert datos["source"] == "dividendera:CFMITNIPSA"
+    assert len(datos["data"]) == 3
+    # El fixture de dividendera trae el 23-10: el catch-up agrega solo ese punto.
     assert (
-        "[AVISO] CFMITNIPSA se usó la fuente de respaldo dividendera:CFMITNIPSA" in out
+        "[OK] CFMITNIPSA fecha=2026-10-23 close=4937.2 "
+        "fuente=dividendera:CFMITNIPSA nuevos=1" in out
     )
-    assert "429" in out
-    assert (
-        "[OK] CFMITNIPSA fecha=2026-10-23 close=4937.2 fuente=dividendera:CFMITNIPSA" in out
-    )
+    assert "[AVISO]" not in out
+    # No se consultó el respaldo: una sola petición, a la URL del nemo.
+    assert fuentes["llamadas_a"] == 0
     assert fuentes["urls_d"] == ["https://www.dividendera.cl/CFMITNIPSA"]
 
 
-def test_cfmitnipsa_con_respaldo_publica_igual_sin_backfill(
+def test_cfmitnipsa_si_cae_dividendera_usa_ledgifi_y_avisa(tmp_path, fuentes, capsys):
+    fuentes["error_d"] = FetchError(
+        "la fuente respondió HTTP 503; se reintentará", retryable=True
+    )
+    ruta = escribir_feed(
+        tmp_path / "quotes" / "CFMITNIPSA.json",
+        feed_de("CFMITNIPSA", [(date(2026, 10, 14), 5054.0853)]),
+    )
+
+    codigo, out, _ = correr(_args(tmp_path, "2026-10-19", fondo="CFMITNIPSA"), capsys)
+
+    datos = leer_json(ruta)
+    assert codigo == 0
+    assert datos["data"][-1] == {"date": "2026-10-15", "close": 5054.2279}
+    assert datos["source"] == "ledgifi:9019"
+    assert (
+        "[AVISO] CFMITNIPSA se usó la fuente de respaldo ledgifi:9019: "
+        "la primaria dividendera:CFMITNIPSA falló (primaria dividendera:CFMITNIPSA: "
+        "la fuente respondió HTTP 503; se reintentará)" in out
+    )
+    assert "fuente=ledgifi:9019 nuevos=1" in out
+    assert out.index("[AVISO] CFMITNIPSA") < out.index("[OK] CFMITNIPSA")
+
+
+def test_cfmitnipsa_primaria_sin_indice_busca_el_indice_en_el_respaldo(
     tmp_path, fuentes, capsys, html_dividendera_cfmitnipsa
 ):
-    """El respaldo no trae serie de índice: el backfill se degrada a aviso."""
+    """El índice solo vive en LedgiFi: se busca en la cadena aunque la cuota venga de dividendera."""
 
-    fuentes["error_a"] = FetchError("la fuente respondió HTTP 429", retryable=True)
     fuentes["error_d"] = None
     fuentes["d"] = html_dividendera_cfmitnipsa
     escribir_feed(
         tmp_path / "quotes" / "CFMITNIPSA.json",
-        feed_de("CFMITNIPSA", [(date(2026, 10, 22), 4963.6791)]),
+        feed_de("CFMITNIPSA", [(date(2026, 10, 22), 4978.3)]),
     )
 
     codigo, out, err = correr(
         _args(tmp_path, "2026-10-23", "--backfill", "10", fondo="CFMITNIPSA"), capsys
     )
 
+    # La cuota se pidió a dividendera y el índice se fue a buscar a LedgiFi; como
+    # el índice de LedgiFi no cubre el 23-10, el backfill se degrada a aviso y no
+    # bloquea el feed (§5.2).
     assert codigo == 0
     assert err == ""
-    assert "[OK] CFMITNIPSA fecha=2026-10-23" in out
+    assert "fuente=dividendera:CFMITNIPSA" in out
     assert "[AVISO] CFMITNIPSA backfill:" in out
+    assert "2026-10-23" in out
+    assert fuentes["llamadas_d"] == 1
+    # LedgiFi se lee dos veces cuando se pide el índice: markdown y HTML.
+    assert fuentes["llamadas_a"] == 2
     assert not (tmp_path / "quotes" / "CFMITNIPSA.backfill.json").exists()
 
 
 def test_cfmitnipsa_con_ambas_caidas_no_publica(tmp_path, fuentes, capsys):
-    fuentes["error_a"] = FetchError("la fuente respondió HTTP 429", retryable=True)
     fuentes["error_d"] = FetchError("la fuente respondió HTTP 503", retryable=True)
+    fuentes["error_a"] = FetchError("la fuente respondió HTTP 429", retryable=True)
     ruta = escribir_feed(
         tmp_path / "quotes" / "CFMITNIPSA.json",
-        feed_de("CFMITNIPSA", [(date(2026, 10, 22), 4963.6791)]),
+        feed_de("CFMITNIPSA", [(date(2026, 10, 22), 4978.3)]),
     )
     antes = ruta.read_bytes()
 
@@ -200,10 +229,10 @@ def test_cfmitnipsa_con_ambas_caidas_no_publica(tmp_path, fuentes, capsys):
     assert codigo == 1
     assert ruta.read_bytes() == antes
     falla = next(linea for linea in out.splitlines() if linea.startswith("[FALLA] CFMITNIPSA"))
-    assert "fuente=ledgifi:9019" in falla
-    assert "primaria ledgifi:9019: no se pudo obtener la cuota de CFMITNIPSA" in falla
+    assert "fuente=dividendera:CFMITNIPSA" in falla
+    assert "primaria dividendera:CFMITNIPSA: la fuente respondió HTTP 503" in falla
+    assert "respaldo ledgifi:9019: no se pudo obtener la cuota de CFMITNIPSA" in falla
     assert "HTTP 429" in falla
-    assert "respaldo dividendera:CFMITNIPSA: la fuente respondió HTTP 503" in falla
     assert "[FALLA] CFMITNIPSA" in err
 
 
@@ -214,7 +243,7 @@ def test_la_pagina_de_estado_muestra_la_cadena(
     fuentes["d"] = html_dividendera_cfinrentas
     escribir_feed(
         tmp_path / "quotes" / "CFMITNIPSA.json",
-        feed_de("CFMITNIPSA", [(date(2026, 10, 22), 4963.6791)]),
+        feed_de("CFMITNIPSA", [(date(2026, 10, 22), 4978.3)]),
     )
     escribir_feed(
         tmp_path / "quotes" / "CFINRENTAS.json",
@@ -226,5 +255,5 @@ def test_la_pagina_de_estado_muestra_la_cadena(
     html = (tmp_path / "index.html").read_text(encoding="utf-8")
     assert codigo == 0
     assert "dividendera:CFINRENTAS (respaldo: aindependencia:bolsa)" in html
-    assert "ledgifi:9019 (respaldo: dividendera:CFMITNIPSA)" in html
+    assert "dividendera:CFMITNIPSA (respaldo: ledgifi:9019)" in html
     assert 'class="alerta"' not in html

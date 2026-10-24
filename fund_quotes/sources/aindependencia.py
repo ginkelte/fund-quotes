@@ -150,8 +150,13 @@ def parse_quote(html: str) -> Quote:
     return Quote(date=fecha, close=cierre)
 
 
-def cargar(con_indice: bool = False) -> tuple[Quote, None]:
-    """Una sola petición a la fuente. Esta fuente no expone serie de índice."""
+def cargar(con_indice: bool = False) -> tuple[list[Quote], None]:
+    """Una sola petición a la fuente; devuelve únicamente el último punto BOLSA.
+
+    El contrato del adaptador es ``list[Quote]``: acá siempre es de largo 1,
+    porque la serie ``BOLSA`` solo se publica hasta la fecha de cierre vigente.
+    Esta fuente no expone serie de índice.
+    """
 
     html = fetch_text(URL, min_bytes=10_000)
-    return parse_quote(html), None
+    return [parse_quote(html)], None

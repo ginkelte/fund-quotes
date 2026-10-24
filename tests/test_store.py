@@ -59,7 +59,7 @@ def test_ac13_el_contrato_incluye_currency_clp_y_name_del_catalogo():
     datos = json.loads(store.serialize(feed))
     assert datos["currency"] == "CLP"
     assert datos["name"] == "FM IT NOW S&P IPSA"
-    assert datos["source"] == "ledgifi:9019"
+    assert datos["source"] == "dividendera:CFMITNIPSA"
     assert datos["updated"] == "2026-10-15"
     assert datos["data"] == [{"date": "2026-10-15", "close": 5054.2279}]
 
@@ -158,44 +158,46 @@ def test_rechaza_close_como_texto(tmp_path):
 
 def test_ec004_sin_feed_previo_se_crea_con_un_punto():
     quote = Quote(date(2026, 10, 15), 2181.18)
-    fusionado, estado = store.merge(None, quote, FUND_B)
-    assert estado == "nuevo"
-    assert fusionado.data == [quote]
-    assert fusionado.updated == date(2026, 10, 15)
+    resultado = store.merge(None, quote, FUND_B)
+    assert resultado.estado == "nuevo"
+    assert resultado.feed.data == [quote]
+    assert resultado.feed.updated == date(2026, 10, 15)
+    assert resultado.agregados == [quote]
 
 
 def test_ac03_append_only_conserva_los_100_puntos_previos():
     previos = puntos_habiles(100, date(2026, 10, 14), 2175.45)
     feed = feed_de("CFINRENTAS", previos)
     nuevo = Quote(date(2026, 10, 15), 2181.18)
-    fusionado, estado = store.merge(feed, nuevo, FUND_B)
-    assert estado == "agregado"
-    assert len(fusionado.data) == 101
-    assert fusionado.data[:100] == feed.data
-    assert fusionado.data[-1] == nuevo
-    assert fusionado.updated == date(2026, 10, 15)
+    resultado = store.merge(feed, nuevo, FUND_B)
+    assert resultado.estado == "agregado"
+    assert resultado.agregados == [nuevo]
+    assert len(resultado.feed.data) == 101
+    assert resultado.feed.data[:100] == feed.data
+    assert resultado.feed.data[-1] == nuevo
+    assert resultado.feed.updated == date(2026, 10, 15)
 
 
 def test_ac02_idempotencia_no_cambia_el_feed():
     feed = feed_de("CFMITNIPSA", [(date(2026, 10, 15), 5054.2279)])
     antes = store.serialize(feed)
-    fusionado, estado = store.merge(feed, Quote(date(2026, 10, 15), 5054.2279), FUND_A)
-    assert estado == "sin_cambios"
-    assert store.serialize(fusionado) == antes
+    resultado = store.merge(feed, Quote(date(2026, 10, 15), 5054.2279), FUND_A)
+    assert resultado.estado == "sin_cambios"
+    assert store.serialize(resultado.feed) == antes
 
 
 def test_ec001_mismo_dia_con_otro_valor_conserva_el_guardado():
     feed = feed_de("CFMITNIPSA", [(date(2026, 10, 15), 5054.2279)])
-    fusionado, estado = store.merge(feed, Quote(date(2026, 10, 15), 5054.50), FUND_A)
-    assert estado == "conflicto"
-    assert fusionado.data == feed.data
+    resultado = store.merge(feed, Quote(date(2026, 10, 15), 5054.50), FUND_A)
+    assert resultado.estado == "conflicto"
+    assert resultado.feed.data == feed.data
 
 
 def test_ec003_fecha_anterior_al_ultimo_punto_es_no_op():
     feed = feed_de("CFMITNIPSA", [(date(2026, 10, 14), 5054.0853), (date(2026, 10, 15), 5054.2279)])
-    fusionado, estado = store.merge(feed, Quote(date(2026, 10, 13), 5000.0), FUND_A)
-    assert estado == "antiguo"
-    assert fusionado.data == feed.data
+    resultado = store.merge(feed, Quote(date(2026, 10, 13), 5000.0), FUND_A)
+    assert resultado.estado == "antiguo"
+    assert resultado.feed.data == feed.data
 
 
 def test_ec008_falla_de_escritura_deja_el_original_intacto(tmp_path, monkeypatch):

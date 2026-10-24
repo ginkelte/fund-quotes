@@ -89,13 +89,15 @@ def test_cargar_usa_el_modo_markdown_primero(monkeypatch, md_ledgifi):
         return md_ledgifi
 
     monkeypatch.setattr(ledgifi, "fetch_text", falso_fetch)
-    quote, indice = ledgifi.cargar()
+    serie, indice = ledgifi.cargar()
     assert len(llamadas) == 1
     # El modo primario va sin x-return-format: con esa cabecera jina devuelve el
     # checkpoint de Vercel en lugar de la ficha renderizada.
     assert "headers" not in llamadas[0]
-    assert quote.date.isoformat() == "2026-10-22"
-    assert quote.close == 4963.6791
+    # LedgiFi solo publica la última cuota: el contrato es list[Quote] de largo 1.
+    assert len(serie) == 1
+    assert serie[0].date.isoformat() == "2026-10-22"
+    assert serie[0].close == 4963.6791
     assert indice is None
     assert ledgifi.PROXY_URL.startswith("https://r.jina.ai/https://ledgifi.com/")
 
@@ -200,10 +202,11 @@ def test_markdown_bloqueado_cae_al_modo_html(monkeypatch, html_ledgifi):
         return checkpoint
 
     monkeypatch.setattr(ledgifi, "fetch_text", falso_fetch)
-    quote, indice = ledgifi.cargar()
+    serie, indice = ledgifi.cargar()
     assert len(llamadas) == 2
-    assert quote.date.isoformat() == "2026-10-15"
-    assert quote.close == 5054.2279
+    assert len(serie) == 1
+    assert serie[0].date.isoformat() == "2026-10-15"
+    assert serie[0].close == 5054.2279
     assert indice is None
 
 
@@ -232,11 +235,11 @@ def test_cargar_con_indice_pide_el_html_tras_el_markdown(monkeypatch, md_ledgifi
         return html_ledgifi if kwargs.get("headers") == ledgifi.CABECERAS_HTML else md_ledgifi
 
     monkeypatch.setattr(ledgifi, "fetch_text", falso_fetch)
-    quote, indice = ledgifi.cargar(con_indice=True)
+    serie, indice = ledgifi.cargar(con_indice=True)
     assert len(llamadas) == 2
     assert "headers" not in llamadas[0]
     assert llamadas[1]["headers"] == {"x-return-format": "html"}
-    assert quote.date.isoformat() == "2026-10-22"
+    assert serie[-1].date.isoformat() == "2026-10-22"
     # El índice solo existe en el HTML; el último punto del fixture es el 15-10.
     assert indice is not None and indice[-1].date.isoformat() == "2026-10-15"
 
@@ -251,7 +254,7 @@ def test_backfill_degrada_si_el_modo_html_esta_bloqueado(monkeypatch, md_ledgifi
         return md_ledgifi
 
     monkeypatch.setattr(ledgifi, "fetch_text", falso_fetch)
-    quote, indice = ledgifi.cargar(con_indice=True)
+    serie, indice = ledgifi.cargar(con_indice=True)
     # La cuota se publica igual; el índice queda en None y el CLI avisa (§5.2).
-    assert quote.close == 4963.6791
+    assert serie[-1].close == 4963.6791
     assert indice is None

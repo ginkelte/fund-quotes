@@ -1,6 +1,9 @@
 """CLI del feed: parsea flags, orquesta por fondo y decide el código de salida.
 
 No parsea HTML ni escribe archivos: delega en los adaptadores y en ``store``.
+El pipeline trabaja por **series**, no por puntos sueltos: cada adaptador puede
+traer varios cierres y el CLI hace el catch-up (agrega todos los posteriores al
+último punto publicado) o la siembra inicial de historia con ``--sembrar-historia``.
 """
 
 from __future__ import annotations
@@ -25,8 +28,8 @@ from .sources.ledgifi import IndexPoint
 ZONA = ZoneInfo("America/Santiago")
 
 # Cada entrada recibe la referencia del catálogo (``<adaptador>:<argumento>``) y si
-# hace falta la serie de índice. Los adaptadores de una sola URL ignoran el
-# argumento; dividendera lo usa como nemo.
+# hace falta la serie de índice. Todos los adaptadores devuelven ``list[Quote]``
+# ascendente; los de una sola URL ignoran el argumento y dividendera lo usa como nemo.
 ADAPTADORES = {
     "ledgifi": lambda _ref, con_indice: ledgifi.cargar(con_indice=con_indice),
     "aindependencia": lambda _ref, con_indice: aindependencia.cargar(con_indice=con_indice),
@@ -42,6 +45,10 @@ SALIDA_CONFIG = 1
 SALIDA_PARCIAL = 2
 SALIDA_GUARDA = 3
 
+# Ventana de siembra de historia inicial (días hábiles hacia atrás).
+SIEMBRA_MIN = 1
+SIEMBRA_MAX = 800
+
 
 class Estado(StrEnum):
     """Estado de un fondo en la corrida; sus valores son los del contrato de salida."""
@@ -56,6 +63,8 @@ class Estado(StrEnum):
 
 @dataclass
 class Resultado:
+    """Resultado de un fondo. ``feed`` es lo que se escribe; ``None`` = no tocar."""
+
     fund: Fund
     estado: Estado
     feed: store.Feed | None = None
@@ -100,6 +109,16 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help=f"genera N puntos de índice derivados ({BACKFILL_MIN}-{BACKFILL_MAX}) en un archivo aparte",
+    )
+    parser.add_argument(
+        "--sembrar-historia",
+        type=int,
+        metavar="N",
+        default=None,
+        help=(
+            "si el feed no existe, lo crea con los últimos N días hábiles de la "
+            f"serie de la fuente ({SIEMBRA_MIN}-{SIEMBRA_MAX}); con feed existente es no-op"
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -154,10 +173,10 @@ def _close_txt(valor: float) -> str:
     return f"{valor:.4f}".rstrip("0").rstrip(".")
 
 
-def _linea_ok(fund: Fund, quote: Quote, fuente: str) -> str:
+def _linea_ok(fund: Fund, quote: Quote, fuente: str, nuevos: int) -> str:
     return (
         f"[OK] {fund.ticker} fecha={quote.date.isoformat()} "
-        f"close={_close_txt(quote.close)} fuente={fuente}"
+        f"close={_close_txt(quote.close)} fuente={fuente} nuevos={nuevos}"
     )
 
 
@@ -186,7 +205,7 @@ class _FalloFuentes(Exception):
 
 def _cargar_fuente(
     referencia: str, con_indice: bool
-) -> tuple[Quote, list[IndexPoint] | None]:
+) -> tuple[list[Quote], list[IndexPoint] | None]:
     """Ejecuta el adaptador de una referencia ``<adaptador>:<argumento>``."""
 
     adaptador, _, argumento = referencia.partition(":")
@@ -198,34 +217,122 @@ def _cargar_fuente(
 
 def _adquirir(
     fund: Fund, con_indice: bool
-) -> tuple[Quote, list[IndexPoint] | None, str, list[str]]:
+) -> tuple[list[Quote], list[IndexPoint] | None, str, list[str]]:
     """Recorre la cadena de fuentes del fondo: primaria y, si falla, respaldos.
 
-    Devuelve ``(quote, indice, fuente_usada, avisos)``. Si la fuente que responde
+    Devuelve ``(serie, indice, fuente_usada, avisos)``. Si la fuente que responde
     no es la primaria, se agrega un ``[AVISO]`` con el motivo del fallo primario.
     Si falla toda la cadena, lanza ``_FalloFuentes`` nombrando cada intento.
+
+    El índice del backfill solo lo publica LedgiFi: si la primaria no lo trae y se
+    pidió ``--backfill``, se busca en el resto de la cadena sin cambiar la fuente
+    de la cuota. Si ningún eslabón lo trae, queda en ``None`` y el CLI degrada el
+    backfill a un aviso (REQ-ADP-004).
     """
 
     motivos: list[str] = []
+    serie: list[Quote] | None = None
+    indice: list[IndexPoint] | None = None
+    fuente = fund.source
+    avisos: list[str] = []
+
     for posicion, referencia in enumerate(fund.sources):
         try:
-            quote, indice = _cargar_fuente(referencia, con_indice)
+            serie_cargada, indice_cargado = _cargar_fuente(referencia, con_indice)
         except (FetchError, SourceError) as exc:
             motivo = exc.motivo if isinstance(exc, FetchError) else str(exc)
             etiqueta = "primaria" if posicion == 0 else "respaldo"
             motivos.append(f"{etiqueta} {referencia}: {motivo}")
             continue
-        avisos: list[str] = []
+        serie = serie_cargada
+        indice = indice_cargado
+        fuente = referencia
         if posicion > 0:
             avisos.append(
                 f"[AVISO] {fund.ticker} se usó la fuente de respaldo {referencia}: "
                 f"la primaria {fund.source} falló ({motivos[0]})"
             )
-        return quote, indice, referencia, avisos
+        break
 
-    if len(motivos) == 1:
-        raise _FalloFuentes(motivos[0])
-    raise _FalloFuentes("; ".join(motivos))
+    if serie is None:
+        if len(motivos) == 1:
+            raise _FalloFuentes(motivos[0])
+        raise _FalloFuentes("; ".join(motivos))
+
+    if con_indice and indice is None:
+        for referencia in fund.sources:
+            if referencia == fuente:
+                continue
+            try:
+                _, indice_otro = _cargar_fuente(referencia, True)
+            except (FetchError, SourceError):
+                continue
+            if indice_otro:
+                indice = indice_otro
+                break
+
+    return serie, indice, fuente, avisos
+
+
+def _separar_por_fecha(
+    fund: Fund, serie: list[Quote], hoy: date, lineas: list[str]
+) -> list[Quote]:
+    """Descarta fechas implausibles (posteriores a hoy + 1) sin abortar el resto."""
+
+    validos: list[Quote] = []
+    for punto in serie:
+        try:
+            guards.validar_fecha(punto, hoy)
+        except guards.FechaImplausible:
+            limite = (hoy + timedelta(days=1)).isoformat()
+            lineas.append(
+                f"[ANOMALIA] {fund.ticker} fecha={punto.date.isoformat()} "
+                f"close={_close_txt(punto.close)} motivo=fecha implausible "
+                f"(posterior a {limite})"
+            )
+            continue
+        validos.append(punto)
+    return validos
+
+
+def _sembrar(
+    fund: Fund,
+    serie: list[Quote],
+    fuente: str,
+    args: argparse.Namespace,
+    lineas: list[str],
+) -> Resultado:
+    """Crea el feed inicial con los últimos N días hábiles de la serie de la fuente.
+
+    Los puntos sembrados no pasan por la guarda de anomalía: son cierres oficiales
+    ya publicados por la fuente. Sí pasaron por la normalización numérica del
+    adaptador y por el chequeo de fecha futura.
+    """
+
+    pedidos = args.sembrar_historia
+    resultado = Resultado(fund=fund, estado=Estado.SIN_CAMBIOS, feed=None, lineas=lineas)
+    try:
+        feed = store.sembrar(fund, serie, pedidos, source=fuente)
+    except store.FeedError as exc:
+        resultado.estado = Estado.FALLA
+        resultado.lineas.append(f"[FALLA] {fund.ticker} siembra: {exc}")
+        return resultado
+
+    resultado.estado = Estado.OK
+    resultado.feed = feed
+    resultado.quote = feed.data[-1]
+    resultado.lineas.append(_linea_ok(fund, feed.data[-1], fuente, len(feed.data)))
+    resultado.lineas.append(
+        f"[AVISO] {fund.ticker} siembra de historia: {len(feed.data)} días hábiles "
+        f"desde {feed.data[0].date.isoformat()} hasta {feed.updated.isoformat()} "
+        "(cierres oficiales de la fuente; la guarda de anomalía no aplica)"
+    )
+    if len(feed.data) < pedidos:
+        resultado.lineas.append(
+            f"[AVISO] {fund.ticker} la fuente solo trajo {len(feed.data)} días hábiles; "
+            f"se sembró todo lo disponible (se pidieron {pedidos})"
+        )
+    return resultado
 
 
 def _procesar_fondo(
@@ -234,119 +341,149 @@ def _procesar_fondo(
     hoy: date,
     args: argparse.Namespace,
 ) -> tuple[Resultado, store.Feed | None]:
-    """Un fondo: fetch -> parse -> guardas -> merge. Devuelve resultado y backfill."""
+    """Un fondo: fetch -> parse -> (siembra | guardas por punto) -> merge -> backfill."""
 
     necesita_indice = args.backfill is not None and fund.supports_backfill
     try:
-        quote, indice, fuente, avisos = _adquirir(fund, necesita_indice)
+        serie, indice, fuente, avisos = _adquirir(fund, necesita_indice)
     except _FalloFuentes as exc:
         return (
             Resultado(
                 fund=fund,
                 estado=Estado.FALLA,
-                feed=existente,
+                feed=None,
                 lineas=[f"[FALLA] {fund.ticker} fuente={fund.source} motivo={exc.motivo}"],
             ),
             None,
         )
 
-    try:
-        guards.validar_fecha(quote, hoy)
-    except guards.FechaImplausible:
-        limite = (hoy + timedelta(days=1)).isoformat()
-        return (
-            Resultado(
-                fund=fund,
-                estado=Estado.ANOMALIA,
-                feed=existente,
-                quote=quote,
-                lineas=avisos
-                + [
-                    (
-                        f"[ANOMALIA] {fund.ticker} fecha={quote.date.isoformat()} "
-                        f"close={_close_txt(quote.close)} motivo=fecha implausible "
-                        f"(posterior a {limite})"
-                    )
-                ],
-            ),
-            None,
+    lineas: list[str] = list(avisos)
+    validos = _separar_por_fecha(fund, serie, hoy, lineas)
+    if not validos:
+        return Resultado(fund=fund, estado=Estado.ANOMALIA, feed=None, lineas=lineas), None
+
+    if args.sembrar_historia is not None:
+        if existente is None:
+            resultado = _sembrar(fund, validos, fuente, args, lineas)
+            return resultado, _backfill_de(resultado, existente, indice, args)
+        lineas.append(
+            f"[AVISO] {fund.ticker} --sembrar-historia no se aplica: el feed ya existe "
+            f"con {len(existente.data)} puntos (la siembra solo crea feeds nuevos)"
         )
 
-    fusionado, estado_merge = store.merge(existente, quote, fund, source=fuente)
-    resultado = Resultado(
-        fund=fund, estado=Estado.SIN_CAMBIOS, feed=existente, quote=quote, lineas=list(avisos)
-    )
+    base = existente.data if existente is not None else []
+    fusion_completa = store.merge(existente, validos, fund, source=fuente)
+    tramo_nuevo = fusion_completa.feed.data[len(base):]
 
-    if estado_merge == "agregado":
-        forzado = False
+    previo = existente.last if existente is not None else None
+    aceptados: list[Quote] = []
+    anomalias: list[guards.AnomaliaDetectada] = []
+    for punto in tramo_nuevo:
         try:
-            guards.validar_anomalia(quote, existente.last if existente else None)
+            guards.validar_anomalia(punto, previo)
         except guards.AnomaliaDetectada as exc:
             if not args.force_anomaly:
-                resultado.estado = Estado.ANOMALIA
-                resultado.lineas.append(_linea_anomalia(fund, exc))
-                return resultado, None
-            forzado = True
-            resultado.lineas.append(
+                anomalias.append(exc)
+                continue
+            lineas.append(
                 f"[AVISO] {fund.ticker} anomalía forzada con --force-anomaly: "
                 f"variacion={guards.formato_pct(exc.variacion, signo=True)} "
                 f"umbral={guards.formato_pct(exc.umbral)} fecha={exc.fecha.isoformat()}"
             )
-        resultado.estado = Estado.OK
-        resultado.feed = fusionado
-        resultado.lineas.append(_linea_ok(fund, quote, fuente))
-        if forzado:
+        aceptados.append(punto)
+        previo = punto
+
+    fusion = fusion_completa if aceptados == tramo_nuevo else store.merge(
+        existente, aceptados, fund, source=fuente
+    )
+    resultado = Resultado(fund=fund, estado=Estado.SIN_CAMBIOS, feed=None, lineas=lineas)
+    estado_merge = fusion.estado
+
+    if anomalias:
+        resultado.estado = Estado.ANOMALIA
+        resultado.quote = aceptados[-1] if aceptados else None
+        if aceptados:
+            # El tramo aceptado sí se publica: el rechazo es punto a punto (§8).
+            resultado.feed = fusion.feed
             resultado.lineas.append(
-                f"[OK] {fund.ticker} punto aceptado por --force-anomaly "
-                f"fecha={quote.date.isoformat()} close={_close_txt(quote.close)}"
+                _linea_ok(fund, aceptados[-1], fuente, len(fusion.agregados))
             )
-    elif estado_merge == "nuevo":
+        for exc in anomalias:
+            resultado.lineas.append(_linea_anomalia(fund, exc))
+        return resultado, _backfill_de(resultado, existente, indice, args)
+
+    ultimo = validos[-1]
+    if estado_merge in ("agregado", "nuevo"):
         resultado.estado = Estado.OK
-        resultado.feed = fusionado
-        resultado.lineas.append(_linea_ok(fund, quote, fuente))
+        resultado.feed = fusion.feed
+        resultado.quote = fusion.feed.data[-1]
+        resultado.lineas.append(
+            _linea_ok(fund, fusion.feed.data[-1], fuente, len(fusion.agregados))
+        )
     elif estado_merge == "conflicto":
-        guardado = existente.data[-1] if existente else quote
-        for punto in existente.data if existente else []:
-            if punto.date == quote.date:
-                guardado = punto
-                break
+        guardado = ultimo
+        if existente is not None:
+            for punto in existente.data:
+                if punto.date == ultimo.date:
+                    guardado = punto
+                    break
         resultado.estado = Estado.CONFLICTO
+        resultado.quote = guardado
         resultado.lineas.append(
             _linea_sin_cambios(fund, guardado, fuente, "ya_existia_con_otro_valor")
         )
         resultado.lineas.append(
-            f"[AVISO] {fund.ticker} el punto {quote.date.isoformat()} ya existía con "
+            f"[AVISO] {fund.ticker} el punto {ultimo.date.isoformat()} ya existía con "
             f"otro valor: se conserva {_close_txt(guardado.close)} "
-            f"(la fuente publicó {_close_txt(quote.close)})"
+            f"(la fuente publicó {_close_txt(ultimo.close)})"
         )
     elif estado_merge == "antiguo":
         resultado.estado = Estado.ANTIGUO
+        resultado.quote = ultimo
         resultado.lineas.append(
-            _linea_sin_cambios(fund, quote, fuente, "fecha_anterior_al_ultimo_punto")
+            _linea_sin_cambios(fund, ultimo, fuente, "fecha_anterior_al_ultimo_punto")
         )
     else:
         resultado.estado = Estado.SIN_CAMBIOS
-        resultado.lineas.append(_linea_sin_cambios(fund, quote, fuente, "ya_publicado"))
+        resultado.quote = ultimo
+        resultado.lineas.append(_linea_sin_cambios(fund, ultimo, fuente, "ya_publicado"))
+        if fusion.descartados:
+            fechas = ", ".join(p.date.isoformat() for p in fusion.descartados[-3:])
+            lineas.append(
+                f"[AVISO] {fund.ticker} {len(fusion.descartados)} punto(s) ya publicados "
+                f"sin cambios (últimos: {fechas})"
+            )
 
-    if necesita_indice:
-        base = resultado.feed if resultado.estado is Estado.OK else existente
-        try:
-            if indice is None or args.backfill is None:
-                raise BackfillError(
-                    f"{fund.ticker} no expone serie de índice: el backfill no está disponible"
-                )
-            backfill = construir_backfill(base, indice, args.backfill, fund)
-        except BackfillError as exc:
-            # El backfill es auxiliar: se degrada a aviso y no condiciona el feed
-            # oficial ni el código de salida (§8).
-            resultado.lineas.append(f"[AVISO] {fund.ticker} backfill: {exc}")
-            return resultado, None
-        return resultado, backfill
+    return resultado, _backfill_de(resultado, existente, indice, args)
 
-    if args.backfill is not None and not fund.supports_backfill:
+
+def _backfill_de(
+    resultado: Resultado,
+    existente: store.Feed | None,
+    indice: list[IndexPoint] | None,
+    args: argparse.Namespace,
+) -> store.Feed | None:
+    """Backfill derivado del fondo, o ``None`` con el motivo como aviso (§5.2)."""
+
+    if args.backfill is None:
+        return None
+    fund = resultado.fund
+    if not fund.supports_backfill:
         resultado.lineas.append(f"[SIN CAMBIOS] {fund.ticker} backfill=no_disponible")
+        return None
 
-    return resultado, None
+    base = resultado.feed if resultado.feed is not None else existente
+    try:
+        if indice is None:
+            raise BackfillError(
+                f"{fund.ticker} no expone serie de índice: el backfill no está disponible"
+            )
+        return construir_backfill(base, indice, args.backfill, fund)
+    except BackfillError as exc:
+        # El backfill es auxiliar: se degrada a aviso y no condiciona el feed
+        # oficial ni el código de salida (§8).
+        resultado.lineas.append(f"[AVISO] {fund.ticker} backfill: {exc}")
+        return None
 
 
 def _resumen_actions(lineas: list[str]) -> None:
@@ -378,6 +515,16 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"[FALLA] configuración: --backfill debe estar entre {BACKFILL_MIN} y "
             f"{BACKFILL_MAX} (recibido {args.backfill})",
+            file=sys.stderr,
+        )
+        return SALIDA_CONFIG
+
+    if args.sembrar_historia is not None and not (
+        SIEMBRA_MIN <= args.sembrar_historia <= SIEMBRA_MAX
+    ):
+        print(
+            f"[FALLA] configuración: --sembrar-historia debe estar entre {SIEMBRA_MIN} y "
+            f"{SIEMBRA_MAX} (recibido {args.sembrar_historia})",
             file=sys.stderr,
         )
         return SALIDA_CONFIG
@@ -419,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
     error_escritura = False
     if not args.dry_run and not todo_fallo:
         for resultado in resultados:
-            if resultado.estado is Estado.OK and resultado.feed is not None:
+            if resultado.feed is not None and resultado.estado in (Estado.OK, Estado.ANOMALIA):
                 ruta = store.feed_path(salida, resultado.fund.ticker)
                 try:
                     store.write_feed(ruta, resultado.feed)
