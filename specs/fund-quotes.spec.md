@@ -408,7 +408,7 @@ Reglas transversales:
 | EC-004 | No existe feed previo | Se crea con el punto de la fuente; la guarda de anomalía no aplica por falta de referencia |
 | EC-005 | Respuesta con "Vercel Security Checkpoint", status 429, o cuerpo menor al umbral (10 KB en modo HTML, 1 KB en modo markdown) | Se trata como bloqueo: en la Fuente A se intenta el otro modo (§4.1); si ambos fallan, reintenta y luego falla ruidosamente |
 | EC-006 | Valor con notación científica, sin decimales, o formato ambiguo (`1,234.56`) | Se rechaza por formato (`REQ-ADP-003`), no se adivina |
-| EC-007 | Cada adaptador entrega exactamente un punto por corrida | El escenario de varios días nuevos no aplica en v1 (queda fuera de alcance) |
+| EC-007 | Cada adaptador entrega varios puntos nuevos en una corrida (serie completa de dividendera) | El catch-up agrega todos los días faltantes del tramo nuevo y rellena huecos interiores (§5.1.1, AC-15); la guarda de anomalía se evalúa punto a punto con el umbral de 5,00% |
 | EC-008 | Falla de escritura (permisos, disco lleno) | El archivo original queda intacto; código `1` |
 
 ## 9. Seguridad y límites
