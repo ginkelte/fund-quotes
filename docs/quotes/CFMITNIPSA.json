@@ -3,7 +3,7 @@
   "name": "FM IT NOW S&P IPSA",
   "currency": "CLP",
   "source": "dividendera:CFMITNIPSA",
-  "updated": "2026-11-04",
+  "updated": "2026-11-06",
   "data": [
     {
       "date": "2026-05-04",
@@ -516,6 +516,14 @@
     {
       "date": "2026-11-04",
       "close": 4860.0
+    },
+    {
+      "date": "2026-11-05",
+      "close": 4815.6
+    },
+    {
+      "date": "2026-11-06",
+      "close": 4872.3
     }
   ]
 }
