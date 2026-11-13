@@ -3,7 +3,7 @@
   "name": "FI Independencia Rentas Inmobiliarias",
   "currency": "CLP",
   "source": "dividendera:CFINRENTAS",
-  "updated": "2026-11-10",
+  "updated": "2026-11-12",
   "data": [
     {
       "date": "2026-04-30",
@@ -536,6 +536,14 @@
     {
       "date": "2026-11-10",
       "close": 2170.1
+    },
+    {
+      "date": "2026-11-11",
+      "close": 2121.015
+    },
+    {
+      "date": "2026-11-12",
+      "close": 2108.821
     }
   ]
 }
